@@ -33,4 +33,4 @@ Decisions taken while building v1, where the spec was open, contradictory, or si
 - Swipe a row left for Reschedule / Delete (the swipe must start ≥ 20 px from the left edge). Native `<input type=time>` (iOS wheel) plus typed entry with the shared parser.
 
 ## Platform notes
-- Bot API 10.4 widgets were verified against the live docs (snapshot in `docs/telegram-widget-reference.txt`). Not yet verified on a real Telegram client: **first real-device test pending** (needs the bot token and a deployed HTTPS URL).
+- Bot API 10.4 widgets were verified against the live docs (snapshot in `docs/telegram-widgets-reference.txt`). Not yet verified on a real Telegram client: **first real-device test pending** (needs the bot token and a deployed HTTPS URL).
