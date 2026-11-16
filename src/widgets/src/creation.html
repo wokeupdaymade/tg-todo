@@ -1,0 +1,57 @@
+<style>
+body{margin:0;padding:8px 12px 10px}
+.h{color:var(--tg-theme-hint-color);margin:4px 0}
+.ti{font-weight:600;overflow-wrap:anywhere;margin:2px 0 4px}
+button{width:100%;margin-top:6px}
+.x{color:var(--tg-theme-destructive-text-color)}
+.g2,.g4,.g7{display:grid;gap:6px;margin-top:6px}
+.g2{grid-template-columns:1fr 1fr}
+.g4{grid-template-columns:repeat(4,1fr)}
+.g7{grid-template-columns:repeat(7,1fr);gap:2px;text-align:center}
+.g2 button,.g4 button,.g7 button{margin:0}
+.g4 button{padding:0;height:36px}
+.g7 button{padding:0;height:36px;border-radius:18px;background:none;color:var(--tg-theme-text-color)}
+.g7 .td{color:var(--tg-theme-link-color);font-weight:700}
+.g7 .se{background:var(--tg-theme-button-color);color:var(--tg-theme-button-text-color)}
+.g7 button[disabled]{color:var(--tg-theme-hint-color)}
+.wd{font-size:.75em;color:var(--tg-theme-hint-color)}
+.cn{display:flex;align-items:center;justify-content:space-between;margin-top:4px}
+.cn button{width:44px;margin:0;padding:4px 0}
+.ok{font-weight:600}
+.er{color:var(--tg-theme-destructive-text-color);font-size:.85em;margin:6px 0 0}
+</style>
+<div id="m"></div>
+<script>
+var W=window.TelegramWidget,S=null,last=-1,V='',cm=null,hr=-1,busy=0,err='';
+var MN=['January','February','March','April','May','June','July','August','September','October','November','December'];
+function p2(n){return(n<10?'0':'')+n}
+function st(){try{var s=JSON.parse(W&&W.chatData);if(s&&s.r>last){last=s.r;S=s;V=s.c&&s.s=='d'?'c':'';hr=-1;cm=null;err=''}}catch(e){}}
+function esc(s){return String(s).replace(/[&<>"']/g,function(c){return'&#'+c.charCodeAt(0)+';'})}
+function hap(t){try{W.HapticFeedback.notificationOccurred(t)}catch(e){}}
+function go(d,retry){W.request(d).then(function(x){busy=0;var r=null;try{r=JSON.parse(x.result)}catch(e){}if(r&&r.e){err=r.e;hap('error')}draw()},function(e){if(retry&&/BUSY|RATE|TIMEOUT/.test(e.code))setTimeout(function(){go(d,0)},5100);else{busy=0;err="Couldn't save ("+e.code+'). Try again.';draw()}})}
+function R(op,a){if(busy||!S||!W)return;busy=1;err='';draw();go(op+'.'+S.i+'.'+S.r+(a?'.'+a:''),1)}
+function v(x){V=x;draw()}
+function M(d){var m=cm[1]+d;cm=[cm[0]+Math.floor(m/12),(m%12+12)%12];draw()}
+function H(h){hr=h;v('m')}
+function cal(){var y=S.y.split('-').map(Number);if(!cm){var b=(S.d||S.y).split('-').map(Number);cm=[b[0],b[1]-1]}
+var Y=cm[0],m=cm[1],first=(new Date(Date.UTC(Y,m,1)).getUTCDay()+6)%7,n=new Date(Date.UTC(Y,m+1,0)).getUTCDate(),canPrev=Y*12+m>y[0]*12+y[1]-1;
+var h='<div class="cn"><button '+(canPrev?'onclick="M(-1)"':'disabled')+'>‹</button><b>'+MN[m]+' '+Y+'</b><button onclick="M(1)">›</button></div><div class="g7">';
+'MTWTFSS'.split('').forEach(function(c){h+='<span class="wd">'+c+'</span>'});
+for(var i=0;i<first;i++)h+='<span></span>';
+for(var d=1;d<=n;d++){var k=Y+'-'+p2(m+1)+'-'+p2(d),past=k<S.y;h+='<button class="'+(k==S.y?'td':'')+(k==S.d?' se':'')+'"'+(past?' disabled':' onclick="R(\'fd\',\''+k.replace(/-/g,'')+'\')"')+'>'+d+'</button>'}
+return h+'</div><div class="g2"><button onclick="v(\'\')">Back</button><button class="x" onclick="R(\'fx\')">Cancel</button></div>'}
+function draw(){var h='',BC='<div class="g2"><button onclick="R(\'fb\')">Back</button><button class="x" onclick="R(\'fx\')">Cancel</button></div>';
+if(!S)h='<p class="h">Loading…</p>';
+else if(S.s=='S')h='<p class="ok">✓ Saved: '+esc(S.t)+'</p>';
+else if(S.s=='X')h='<p class="h">Cancelled: '+esc(S.t)+'</p>';
+else{h='<div class="ti">'+esc(S.t)+'</div>';
+if(S.s=='d')h+=V=='c'?cal():'<p class="h">When?</p><div class="g2"><button onclick="R(\'fd\',\'t\')">Today</button><button onclick="R(\'fd\',\'m\')">Tomorrow</button></div><button onclick="v(\'c\')">Other Date</button><button class="x" onclick="R(\'fx\')">Cancel</button>';
+else if(V=='h'){h+='<p class="h">'+esc(S.l)+' · Hour</p><div class="g4">';for(var i=0;i<24;i++)h+='<button onclick="H('+i+')">'+p2(i)+'</button>';h+='</div><button onclick="v(\'\')">Back</button>'}
+else if(V=='m'){h+='<p class="h">'+esc(S.l)+' · '+p2(hr)+':__</p><div class="g4">';for(var j=0;j<60;j+=5)h+='<button onclick="R(\'ft\',\''+p2(hr)+p2(j)+'\')">'+p2(hr)+':'+p2(j)+'</button>';h+='</div><button onclick="v(\'h\')">Back</button>'}
+else h+='<p class="h">'+esc(S.l)+' · What time?</p><button onclick="R(\'ft\',\'n\')">No Specific Time</button><button onclick="v(\'h\')">Select Time</button>'+BC;
+if(busy)h+='<p class="h">Saving…</p>';if(err)h+='<p class="er">'+esc(err)+'</p>'}
+if(busy)h=h.replace(/<button/g,'<button disabled');
+document.getElementById('m').innerHTML=h}
+st();draw();
+if(W){W.onEvent('chatDataChanged',function(){st();draw()});W.ready()}
+</script>

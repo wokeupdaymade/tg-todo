@@ -1,0 +1,27 @@
+<style>
+body{margin:0;padding:10px 12px 10px}
+.tm{font-size:1.5em;font-weight:700}
+.h{color:var(--tg-theme-hint-color);font-size:.85em;font-weight:400}
+.ti{margin:2px 0 6px;overflow-wrap:anywhere}
+button{width:100%;margin-top:6px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.er{color:var(--tg-theme-destructive-text-color);font-size:.85em;margin:6px 0 0}
+</style>
+<div id="m"></div>
+<script>
+var W=window.TelegramWidget,S=null,last=-1,busy=0,err='',ok='';
+function st(){try{var s=JSON.parse(W&&W.chatData);if(s&&s.r>=last){last=s.r;S=s}}catch(e){}}
+function esc(s){return String(s).replace(/[&<>"']/g,function(c){return'&#'+c.charCodeAt(0)+';'})}
+function R(op,msg){if(busy||!S||!W)return;busy=1;err='';draw();go(op+'.'+S.i+'.'+S.r,msg,1)}
+function go(d,msg,retry){W.request(d).then(function(x){busy=0;var r=null;try{r=JSON.parse(x.result)}catch(e){}if(r&&r.e)err=r.e;else ok=msg;try{W.HapticFeedback.notificationOccurred(err?'error':'success')}catch(e){}draw()},function(e){if(retry&&/BUSY|RATE|TIMEOUT/.test(e.code))setTimeout(function(){go(d,msg,0)},5100);else{busy=0;err="Couldn't send ("+e.code+'). Try again.';draw()}})}
+function draw(){var h='';
+if(!S)h='<p class="h">Reminder</p>';
+else{h='<div class="tm">⏰ '+esc(S.h)+(S.l?' <span class="h">'+esc(S.l)+'</span>':'')+'</div><div class="ti">'+esc(S.t)+'</div>';
+if(ok)h+='<p class="h">'+ok+'</p>';
+else h+='<button onclick="R(\'rd\',\'Done ✓\')">Done</button><div class="g2"><button onclick="R(\'rs\',\'Snoozed for 15 min\')">Snooze 15 min</button><button onclick="R(\'rx\',\'Dismissed\')">Dismiss</button></div>';
+if(err)h+='<p class="er">'+esc(err)+'</p>'}
+if(busy)h=h.replace(/<button/g,'<button disabled');
+document.getElementById('m').innerHTML=h}
+st();draw();
+if(W){W.onEvent('chatDataChanged',function(){st();draw()});W.ready()}
+</script>

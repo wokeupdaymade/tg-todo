@@ -1,0 +1,44 @@
+<style>
+body{margin:0;padding:8px 12px 10px}
+.h{color:var(--tg-theme-hint-color)}
+.s{display:flex;gap:6px;align-items:baseline;font-weight:600;margin:6px 0 2px}
+.s .h{font-weight:400;font-size:.85em}
+.r{display:flex;align-items:center;gap:10px;min-height:38px}
+.c{flex:none;width:24px;height:24px;padding:0;margin:0;border-radius:50%;border:1.5px solid var(--tg-theme-hint-color);background:none;color:var(--tg-theme-button-text-color);font-size:14px;line-height:20px}
+.d .c{background:var(--tg-theme-button-color);border-color:var(--tg-theme-button-color)}
+.t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d .t{text-decoration:line-through;color:var(--tg-theme-hint-color)}
+.l{flex:none;font-size:.85em;color:var(--tg-theme-hint-color);white-space:nowrap}
+.late{color:var(--tg-theme-destructive-text-color)}
+.u{flex:none;width:auto;margin:0;padding:2px 10px;font-size:.85em}
+.p{font-size:.85em;padding:2px 0 4px 34px}
+.o{margin-top:8px;color:var(--tg-theme-destructive-text-color);font-size:.9em}
+.e{margin:6px 0 2px}
+.v{width:100%;margin-top:10px}
+.er{color:var(--tg-theme-destructive-text-color);font-size:.85em;margin:6px 0 0}
+</style>
+<div id="m"></div>
+<script>
+var W=window.TelegramWidget,S=null,last=-1,busy=0,err='';
+function st(){try{var s=JSON.parse(W&&W.chatData);if(s&&s.r>=last){last=s.r;S=s}}catch(e){}}
+function esc(s){return String(s).replace(/[&<>"']/g,function(c){return'&#'+c.charCodeAt(0)+';'})}
+function L(p){if(W&&S&&S.b)W.openTelegramLink('https://t.me/'+S.b+'?startapp='+p)}
+function hap(t){try{W.HapticFeedback.notificationOccurred(t)}catch(e){}}
+function A(a,i){if(busy||!W)return;busy=1;err='';draw();go(a+'.'+i,1)}
+function go(d,retry){W.request(d).then(function(x){busy=0;var r=null;try{r=JSON.parse(x.result)}catch(e){}if(r&&r.e)err=r.e;hap(err?'error':'success');draw()},function(e){if(retry&&/BUSY|RATE|TIMEOUT/.test(e.code))setTimeout(function(){go(d,0)},5100);else{busy=0;err="Couldn't save ("+e.code+'). Try again.';draw()}})}
+function row(r){var i=r[0],f=r[3],dn=f&1;return'<div class="r'+(dn?' d':'')+'"><button class="c" onclick="A(\''+(dn?'pu':'pc')+'\','+i+')">'+(dn?'✓':'')+'</button><span class="t" onclick="L(\'t'+i+'\')">'+esc(r[1])+'</span>'+(dn?'<button class="u" onclick="A(\'pu\','+i+')">Undo</button>':r[2]?'<span class="l'+(f&2?' late':'')+'">'+esc(r[2])+'</span>':'')+'</div>'}
+function more(n,p){return n?'<div class="h p" onclick="L(\''+p+'\')">+'+n+' more</div>':''}
+function draw(){var h='';
+if(!S)h='<p class="h e">Loading…</p>';
+else if(S.x||S.v>1)h='<p class="h e">This preview is out of date — the current one is further down.</p>';
+else{var T=S.T||[],O=S.O||[];
+if(!T.length&&!O.length&&!S.n&&!S.m&&!S.k)h='<p class="e">Nothing planned.</p><p class="h e">Send me a message to add a task.</p>';
+else{h='<div class="s" onclick="L(\'today\')">Today <span class="h">'+esc(S.d)+'</span></div>'+(T.length?T.map(row).join(''):'<div class="h p">Nothing left for today</div>')+more(S.m,'today');
+if(O.length||S.k)h+='<div class="s" onclick="L(\'other\')">Other days</div>'+O.map(row).join('')+more(S.k,'other');
+if(S.n)h+='<div class="o" onclick="L(\'overdue\')">'+S.n+' overdue ›</div>'}
+h+='<button class="v" onclick="L(\'all\')">Open app</button>';if(err)h+='<p class="er">'+esc(err)+'</p>'}
+if(busy)h=h.replace(/<button/g,'<button disabled');
+document.getElementById('m').innerHTML=h}
+st();draw();
+if(W){W.onEvent('chatDataChanged',function(){st();err='';draw()});W.ready()}
+</script>
