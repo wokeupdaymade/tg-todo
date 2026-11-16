@@ -44,6 +44,15 @@ docs/                spec, decisions, Telegram widget reference snapshot
 
 No public address? Run the `bot` service alone and expose port 8080 through a tunnel (e.g. Cloudflare Tunnel); set `PUBLIC_URL` to the tunnel's https URL.
 
+### On a Windows PC (one click)
+
+1. Install **Node.js 22 LTS** (22.18+) from nodejs.org.
+2. Double-click **`start.bat`**. On the first run it creates `.env` and opens it in Notepad: fill in `BOT_TOKEN`, `ALLOWED_USER_IDS`, `DEFAULT_TZ`, save, and double-click `start.bat` again.
+3. It installs what it needs (including `cloudflared` via winget), builds, opens an HTTPS tunnel, and starts the bot. If the Mini App address changed, it shows it (and copies it to the clipboard). Paste it in BotFather → *Configure Mini App*.
+4. **Close the window to stop the bot.** If the bot crashes it restarts by itself.
+
+The free tunnel address changes on every start. For a fixed one, get a free static domain from ngrok, run `ngrok config add-authtoken …` once, and set `NGROK_DOMAIN` in `.env`. The bot only runs (and reminds) while the PC is on.
+
 ### Without Docker
 
 ```bash

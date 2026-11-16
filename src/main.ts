@@ -73,6 +73,7 @@ async function main() {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  process.on('SIGHUP', shutdown); // Windows: console window closed
   await poller.run();
 }
 
