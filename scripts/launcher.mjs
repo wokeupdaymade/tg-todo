@@ -46,8 +46,10 @@ function readEnv(file) {
   return env;
 }
 
-function run(cmd, args, label) {
-  const r = spawnSync(cmd, args, { cwd: root, stdio: 'inherit', shell: isWin });
+// `useShell` only for npm (npm.cmd on Windows). Never for paths that may contain spaces,
+// like "C:\\Program Files\\nodejs\\node.exe": cmd.exe would split them.
+function run(cmd, args, label, useShell = false) {
+  const r = spawnSync(cmd, args, { cwd: root, stdio: 'inherit', shell: useShell && isWin });
   if (r.status !== 0) fail(`${label} failed (see the messages above).`);
 }
 
@@ -79,6 +81,11 @@ if (!existsSync(envFile)) {
   if (isWin) spawn('notepad', [envFile], { detached: true, stdio: 'ignore' }).unref();
   fail('First run: I created the settings file ".env" (it should open in Notepad).\nFill in BOT_TOKEN, ALLOWED_USER_IDS and DEFAULT_TZ, save it, then run start.bat again.');
 }
+// Notepad may save a UTF-8 BOM, which would hide the first setting from Node.
+{
+  const raw = readFileSync(envFile, 'utf8');
+  if (raw.charCodeAt(0) === 0xfeff) writeFileSync(envFile, raw.slice(1));
+}
 const env = readEnv(envFile);
 if (!env.BOT_TOKEN || /replace-me/.test(env.BOT_TOKEN)) fail('Put your bot token from @BotFather into BOT_TOKEN in the .env file.');
 if (!env.ALLOWED_USER_IDS || env.ALLOWED_USER_IDS === '111111111') fail('Put your Telegram user id (ask @userinfobot) into ALLOWED_USER_IDS in the .env file.');
@@ -86,7 +93,7 @@ if (!env.ALLOWED_USER_IDS || env.ALLOWED_USER_IDS === '111111111') fail('Put you
 // 2. Install & build --------------------------------------------------------------
 if (!existsSync(join(root, 'node_modules'))) {
   say('  Installing dependencies (first run only)...');
-  run('npm', ['install', '--no-audit', '--no-fund'], 'npm install');
+  run('npm', ['install', '--no-audit', '--no-fund'], 'npm install', true);
 }
 say('  Building...');
 run(process.execPath, ['scripts/build.ts'], 'Build');

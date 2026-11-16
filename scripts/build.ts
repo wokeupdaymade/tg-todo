@@ -12,8 +12,10 @@ const WIDGET_LIMIT = 3800; // Telegram's hard limit is 4096 bytes after zlib lev
 
 /** Exact server-side count uses Python's zlib; fall back to Node's (can differ by a few dozen bytes). */
 function compressedSize(html: string): number {
+  // On Windows "python3" is often a Microsoft Store stub: don't call it there.
+  if (process.platform === 'win32') return deflateSync(Buffer.from(html), { level: 9 }).length;
   try {
-    const n = execFileSync('python3', ['-I', '-c', 'import sys,zlib; print(len(zlib.compress(sys.stdin.buffer.read(), 9)))'], { input: html });
+    const n = execFileSync('python3', ['-I', '-c', 'import sys,zlib; print(len(zlib.compress(sys.stdin.buffer.read(), 9)))'], { input: html, stdio: ['pipe', 'pipe', 'ignore'] });
     return Number(String(n).trim());
   } catch {
     return deflateSync(Buffer.from(html), { level: 9 }).length;
