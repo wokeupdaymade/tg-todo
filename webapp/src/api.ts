@@ -14,7 +14,12 @@ export class ApiError extends Error {
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
-    headers: { authorization: `tma ${initData()}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: {
+      authorization: `tma ${initData()}`,
+      // Free ngrok addresses show a warning page to browsers; this header skips it for API calls.
+      'ngrok-skip-browser-warning': '1',
+      ...(body ? { 'content-type': 'application/json' } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   let json: unknown = null;

@@ -102,8 +102,13 @@ run(process.execPath, ['scripts/build.ts'], 'Build');
 async function startTunnel() {
   if (env.NGROK_DOMAIN) {
     const domain = env.NGROK_DOMAIN.replace(/^https?:\/\//, '').replace(/\/+$/, '');
-    const ngrok = findExe('ngrok');
-    if (!ngrok) fail('NGROK_DOMAIN is set but ngrok is not installed.\nInstall it from https://ngrok.com/download (and run "ngrok config add-authtoken ..." once).');
+    let ngrok = findExe('ngrok');
+    if (!ngrok && isWin) {
+      say('  ngrok not found; installing it with winget (one time)...');
+      spawnSync('winget', ['install', '--id', 'Ngrok.Ngrok', '-e', '--accept-source-agreements', '--accept-package-agreements'], { stdio: 'inherit' });
+      ngrok = findExe('ngrok', [join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'ngrok.exe')]);
+    }
+    if (!ngrok) fail('ngrok is not installed (or a new window is needed after installing it).\nInstall it from https://ngrok.com/download, then run start.bat again.');
     say(`  Starting tunnel (ngrok, ${domain})...`);
     const p = spawn(ngrok, ['http', `--url=${domain}`, String(PORT), '--log=stdout'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
     children.add(p);
@@ -133,7 +138,14 @@ function waitForUrl(proc, toUrl, re) {
     };
     proc.stdout.on('data', onData);
     proc.stderr.on('data', onData);
-    proc.on('exit', (code) => fail(`The tunnel stopped (exit code ${code}). Its output:\n` + log.slice(-1500)));
+    proc.on('exit', (code) => {
+      const hint = /ERR_NGROK_4018|authtoken/i.test(log)
+        ? 'ngrok needs your account token once. Copy the command from https://dashboard.ngrok.com/get-started/your-authtoken\n(it looks like: ngrok config add-authtoken 2abc...), run it in a terminal, then start.bat again.\n\n'
+        : /ERR_NGROK_(313|320|15013)|domain/i.test(log)
+          ? 'ngrok refused the address in NGROK_DOMAIN. Copy it exactly from https://dashboard.ngrok.com/domains\n(only the part like your-name.ngrok-free.app).\n\n'
+          : '';
+      fail(`${hint}The tunnel stopped (exit code ${code}). Its output:\n` + log.slice(-1500));
+    });
   });
 }
 
