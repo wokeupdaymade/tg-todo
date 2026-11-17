@@ -19,6 +19,12 @@ Decisions taken while building v1, where the spec was open, contradictory, or si
 - No reply keyboard in fallback mode: it would only duplicate the inline buttons and add a prompt message. Typed shortcut labels ("Today", "Other Date", "18:00"…) still work.
 - Fallback reminders: a text message (with sound) with ✓ Done / Snooze 15 min / Dismiss.
 
+## Hosting on Windows (start.bat)
+- Tunnel: **Tuna** (tuna.am) by default, because ngrok is geo-blocked for the owner and Cloudflare quick tunnels didn't connect from their network. `TUNNEL=cloudflared|ngrok` remain available.
+- Tuna runs with `TUNA_TUI=0`, `TUNA_INSPECT=false`, `TUNA_NO_PROMPT=1`, and the launcher reads the `Forwarding https://… -> …` log line. Without `TUNA_SUBDOMAIN`, the launcher picks up the free permanent subdomain Tuna suggests, saves it in `data/tuna-subdomain.txt`, and restarts the tunnel on it.
+- Proxy isolation: `TELEGRAM_PROXY` (or HTTP(S)_PROXY from start.bat) is given only to the bot process, through `HTTP(S)_PROXY` + `NODE_USE_ENV_PROXY=1`, with `NO_PROXY` for localhost. The tunnel process gets an environment with every `*_PROXY` variable removed.
+- If the tunnel drops after starting, the launcher reconnects after 10 s and restarts the bot only if the address changed.
+
 ## Parser (§6.3)
 - A lone 1–2 digit number in the time step is a whole hour (`18` → 18:00). `today`/`tomorrow` accepted as dates. Weekday names are not (ambiguous when today is that weekday).
 - `29.02` without a year → next Feb 29.

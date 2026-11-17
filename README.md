@@ -46,15 +46,17 @@ docs/                spec, decisions, Telegram widget reference snapshot
 
 No public address? Run the `bot` service alone and expose port 8080 through a tunnel (e.g. Cloudflare Tunnel); set `PUBLIC_URL` to the tunnel's https URL.
 
-### On a Windows PC (one click)
+### On Windows (PC or VPS), one click
 
-1. Install **Node.js 22 LTS** (22.18+) from nodejs.org.
-2. Sign up at https://ngrok.com (free) and copy your token from https://dashboard.ngrok.com/get-started/your-authtoken.
-3. Double-click **`start.bat`**. On the first run it creates `.env` and opens it in Notepad: fill in `BOT_TOKEN`, `ALLOWED_USER_IDS`, `DEFAULT_TZ` and `NGROK_AUTHTOKEN`, save, and double-click `start.bat` again.
-4. It installs what it needs (ngrok via winget), builds, opens the tunnel, starts the bot and checks that the Mini App is reachable. Your ngrok address stays the same: paste it once in BotFather → *Configure Mini App*.
-5. **Close the window to stop the bot.** If the bot crashes it restarts by itself.
+1. Install **Node.js 24 LTS** or newer from nodejs.org (22.18+ works without a proxy).
+2. Sign up at https://tuna.am and create an **API key** with tunnel access (it starts with `tak_`).
+3. Double-click **`start.bat`**. On the first run it creates `.env` and opens it in Notepad: fill in `BOT_TOKEN`, `ALLOWED_USER_IDS`, `DEFAULT_TZ` and `TUNA_API_KEY` (and `TELEGRAM_PROXY` if Telegram needs a proxy), save, and double-click `start.bat` again.
+4. It installs Tuna via winget, builds, opens the tunnel on your free permanent Tuna address (found automatically), starts the bot, and checks that the Mini App is reachable. Paste the address once in BotFather → *Configure Mini App*.
+5. **Close the window to stop the bot.** The bot restarts by itself if it crashes; the tunnel reconnects by itself if it drops.
 
-Free ngrok addresses show a one-time "Visit Site" warning page when the Mini App opens. `TUNNEL=cloudflared` in `.env` uses Cloudflare's free tunnel instead (no warning page, but a new address on every start). The bot only runs, and reminds you, while the PC is on.
+**Proxy:** `TELEGRAM_PROXY` (or `HTTP_PROXY`/`HTTPS_PROXY` set in `start.bat`) is used only for the bot's Telegram traffic. The tunnel never sees it and connects directly. This needs Node.js 24+.
+
+Free Tuna addresses show a one-time warning page when the Mini App opens in a browser. `TUNNEL=cloudflared` or `TUNNEL=ngrok` in `.env` switch to those tunnels instead.
 
 ### Without Docker
 

@@ -16,7 +16,8 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     method,
     headers: {
       authorization: `tma ${initData()}`,
-      // Free ngrok addresses show a warning page to browsers; this header skips it for API calls.
+      // Free Tuna / ngrok addresses show a warning page to browsers; these headers skip it for API calls.
+      'tuna-skip-browser-warning': '1',
       'ngrok-skip-browser-warning': '1',
       ...(body ? { 'content-type': 'application/json' } : {}),
     },

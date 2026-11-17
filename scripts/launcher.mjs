@@ -158,75 +158,168 @@ if (!existsSync(join(root, 'node_modules'))) {
 say('  Building...');
 run(process.execPath, ['scripts/build.ts'], 'Build');
 
-// 3. Tunnel (gives the Mini App the HTTPS address Telegram requires) ------------------
+// 3. Proxy: only for the bot's Telegram traffic, never for the tunnel ---------------------
+// TELEGRAM_PROXY in .env (or HTTP(S)_PROXY set in start.bat) is used by the bot to reach Telegram.
+// Tunnel clients must connect directly: the variables are removed from their environment.
+const PROXY_KEY = /^(https?|all|no)_proxy$|^node_use_env_proxy$/i;
+function withoutProxy(base) {
+  const e = { ...base };
+  for (const k of Object.keys(e)) if (PROXY_KEY.test(k)) delete e[k];
+  return e;
+}
+const pickEnv = (...names) => { for (const n of names) for (const k of Object.keys(process.env)) if (k.toLowerCase() === n && process.env[k]) return process.env[k]; return ''; };
+const telegramProxy = (env.TELEGRAM_PROXY || pickEnv('https_proxy', 'http_proxy')).trim();
+const tunnelEnv = withoutProxy(process.env);
+function botEnv() {
+  const e = withoutProxy(process.env);
+  if (telegramProxy) Object.assign(e, { HTTP_PROXY: telegramProxy, HTTPS_PROXY: telegramProxy, NO_PROXY: 'localhost,127.0.0.1,::1', NODE_USE_ENV_PROXY: '1' });
+  return e;
+}
+if (telegramProxy) {
+  say(`  Telegram traffic goes through the proxy ${telegramProxy}; the tunnel connects directly.`);
+  if (maj < 24 && !(maj === 22 && min >= 21)) say('  (!) Your Node.js may be too old to use a proxy: install Node.js 24 LTS or newer if Telegram cannot be reached.');
+}
+
+// 4. Tunnel (gives the Mini App the HTTPS address Telegram requires) ------------------------
+// TUNNEL=tuna (default) | cloudflared | ngrok
+const TUNNEL = (env.TUNNEL || 'tuna').toLowerCase();
+const tunaSubFile = join(root, 'data', 'tuna-subdomain.txt');
+
+function installWithWinget(id, name, extraPaths) {
+  let exe = findExe(name, extraPaths);
+  if (!exe && isWin) {
+    say(`  ${name} not found; installing it with winget (one time)...`);
+    spawnSync('winget', ['install', '--id', id, '-e', '--accept-source-agreements', '--accept-package-agreements'], { stdio: 'inherit' });
+    exe = findExe(name, extraPaths);
+  }
+  return exe;
+}
+
 async function startTunnel() {
-  const tunnel = (env.TUNNEL || 'ngrok').toLowerCase();
-  if (tunnel !== 'cloudflared') {
-    // ngrok (default): the free plan gives one permanent address, used automatically.
-    const domain = (env.NGROK_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
-    const token = (env.NGROK_AUTHTOKEN || '').trim();
-    let ngrok = findExe('ngrok');
-    if (!ngrok && isWin) {
-      say('  ngrok not found; installing it with winget (one time)...');
-      spawnSync('winget', ['install', '--id', 'Ngrok.Ngrok', '-e', '--accept-source-agreements', '--accept-package-agreements'], { stdio: 'inherit' });
-      ngrok = findExe('ngrok', [join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'ngrok.exe')]);
+  if (TUNNEL === 'cloudflared') return startCloudflared();
+  if (TUNNEL === 'ngrok') return startNgrok();
+  return startTuna();
+}
+
+async function startTuna(retry = true) {
+  const local = process.env.LOCALAPPDATA || '';
+  const tuna = installWithWinget('yuccastream.tuna', 'tuna', [
+    join(local, 'Microsoft', 'WinGet', 'Links', 'tuna.exe'), join(local, 'Microsoft', 'WindowsApps', 'tuna.exe'),
+  ]);
+  if (!tuna) fail('Tuna is not installed (or a new window is needed after installing it).\nRun:  winget install --id yuccastream.tuna\nthen start.bat again.');
+  const saved = existsSync(tunaSubFile) ? readFileSync(tunaSubFile, 'utf8').trim() : '';
+  const sub = (env.TUNA_SUBDOMAIN || saved).trim().replace(/\..*$/, ''); // accept "name" or "name.ru.tuna.am"
+  const tEnv = { ...tunnelEnv, TUNA_TUI: '0', TUNA_INSPECT: 'false', TUNA_NO_PROMPT: '1', TUNA_LOG: 'stdout', TUNA_LOG_FORMAT: 'text' };
+  if (env.TUNA_API_KEY) tEnv.TUNA_API_KEY = env.TUNA_API_KEY.trim();
+  const args = ['http', String(PORT)];
+  if (sub) args.push(`--subdomain=${sub}`);
+  say(`  Starting tunnel (Tuna${sub ? ', ' + sub : ''})...`);
+  const p = spawn(tuna, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: tEnv });
+  children.add(p);
+  const { url, log } = await waitForTunnel(p, 'tuna', /Forwarding\s+(https:\/\/[^\s"]+)/i, /Forwarding\s+https:/i, (m) => m[1].replace(/\/+$/, ''));
+  if (!sub) {
+    // Tuna suggests the account's free permanent subdomain when started without one: remember it and use it.
+    const m = /--subdomain=([a-z0-9-]+)/i.exec(log) || /permanent free domain:\s*([a-z0-9-]+)\./i.exec(log);
+    if (m && retry) {
+      writeFileSync(tunaSubFile, m[1]);
+      say(`  Found your free permanent Tuna address (${m[1]}); switching to it...`);
+      p.expectedExit = true;
+      p.kill();
+      children.delete(p);
+      await sleepMs(1500);
+      return startTuna(false);
     }
-    if (!ngrok) fail('ngrok is not installed (or a new window is needed after installing it).\nInstall it from https://ngrok.com/download, then run start.bat again.');
-    say(`  Starting tunnel (ngrok${domain ? ', ' + domain : ''})...`);
-    const args = ['http', String(PORT), '--log=stdout'];
-    if (domain) args.push(`--url=${domain}`);
-    if (token) args.push(`--authtoken=${token}`);
-    const p = spawn(ngrok, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
-    children.add(p);
-    const urlRe = /url=(https:\/\/[^\s"]+)/i;
-    return await waitForUrl(p, 'ngrok', (m) => m[1].replace(/\/+$/, ''), urlRe, /started tunnel/i);
+    say('  (!) No permanent Tuna address found: this one changes on every start.\n      Put TUNA_SUBDOMAIN=<name> in .env (the "Free" domain in your Tuna dashboard) to keep it fixed.');
   }
-  let cf = findExe('cloudflared', ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']);
-  if (!cf && isWin) {
-    say('  cloudflared not found; installing it with winget (one time)...');
-    spawnSync('winget', ['install', '--id', 'Cloudflare.cloudflared', '-e', '--accept-source-agreements', '--accept-package-agreements'], { stdio: 'inherit' });
-    cf = findExe('cloudflared', ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']);
-  }
+  return url;
+}
+
+async function startCloudflared() {
+  const cf = installWithWinget('Cloudflare.cloudflared', 'cloudflared', ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']);
   if (!cf) fail('cloudflared is not installed. Run:  winget install --id Cloudflare.cloudflared\nthen start.bat again.');
   say('  Starting tunnel (cloudflared)... this can take up to a minute');
   // http2 runs over TCP 443, which gets through networks that block or throttle QUIC/UDP.
-  const p = spawn(cf, ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', `http://localhost:${PORT}`], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  const p = spawn(cf, ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', `http://localhost:${PORT}`], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: tunnelEnv });
   children.add(p);
   // The address is printed before the connection to Cloudflare exists: wait for both.
-  return await waitForUrl(p, 'cloudflared', (m) => m[0], /https:\/\/[a-z0-9-]+\.trycloudflare\.com/, /Registered tunnel connection/i);
+  return (await waitForTunnel(p, 'cloudflared', /https:\/\/[a-z0-9-]+\.trycloudflare\.com/, /Registered tunnel connection/i, (m) => m[0])).url;
 }
 
-function waitForUrl(proc, name, toUrl, re, readyRe) {
+async function startNgrok() {
+  const ngrok = installWithWinget('Ngrok.Ngrok', 'ngrok', [join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'ngrok.exe')]);
+  if (!ngrok) fail('ngrok is not installed. Install it from https://ngrok.com/download, then run start.bat again.');
+  const domain = (env.NGROK_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  const args = ['http', String(PORT), '--log=stdout'];
+  if (domain) args.push(`--url=${domain}`);
+  if (env.NGROK_AUTHTOKEN) args.push(`--authtoken=${env.NGROK_AUTHTOKEN.trim()}`);
+  say(`  Starting tunnel (ngrok${domain ? ', ' + domain : ''})...`);
+  const p = spawn(ngrok, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: tunnelEnv });
+  children.add(p);
+  return (await waitForTunnel(p, 'ngrok', /url=(https:\/\/[^\s"]+)/i, /started tunnel/i, (m) => m[1].replace(/\/+$/, ''))).url;
+}
+
+const HINTS = {
+  tuna: (log) => /api.?key|unauthori|not logged|login|401|403|token/i.test(log)
+    ? 'Tuna needs your API key. In the Tuna dashboard (https://my.tuna.am) create an API key with tunnel access\n(it starts with tak_) and add this line to .env:\n    TUNA_API_KEY=tak_...\nthen run start.bat again.\n\n'
+    : /subdomain|domain/i.test(log)
+      ? 'Tuna refused the subdomain. Copy the "Free" domain name exactly from the Domains page of your Tuna dashboard\ninto TUNA_SUBDOMAIN in .env (just the name, e.g. brave-otter-4821), or delete data\\tuna-subdomain.txt.\n\n'
+      : '',
+  ngrok: (log) => /ERR_NGROK_(4018|105|107)|authtoken/i.test(log)
+    ? 'ngrok needs your account token: add NGROK_AUTHTOKEN=... to .env.\n\n'
+    : /ERR_NGROK_9009/i.test(log) ? 'ngrok refuses to run through a proxy on the free plan. Remove proxy_url from your ngrok.yml.\n\n' : '',
+  cloudflared: () => '',
+};
+const TIMEOUT_HINT = {
+  tuna: 'Tuna could not connect within 90 seconds. Check the VPS internet connection; Tuna must be able to reach\nits servers directly (it never uses the Telegram proxy).\n\n',
+  cloudflared: 'cloudflared could not connect to Cloudflare within 90 seconds. Your internet provider may be blocking\nor slowing Cloudflare.\n\n',
+  ngrok: 'ngrok could not connect to its servers within 90 seconds.\n\n',
+};
+
+function waitForTunnel(proc, name, urlRe, readyRe, toUrl) {
   return new Promise((resolve) => {
     let log = '', done = false;
     const logFile = join(root, 'data', 'tunnel.log');
     writeFileSync(logFile, `--- ${new Date().toISOString()} ${name}\n`);
-    const timer = setTimeout(() => fail(
-      (name === 'cloudflared'
-        ? 'cloudflared could not connect to Cloudflare within 90 seconds. Your internet provider may be blocking\nor slowing Cloudflare. Try again, try with a VPN on, or use ngrok instead (NGROK_DOMAIN in .env).\n\n'
-        : 'The tunnel did not start within 90 seconds.\n\n') + 'Its output (also saved in data\\tunnel.log):\n' + log.slice(-1500)), 90_000);
+    const timer = setTimeout(() => fail(TIMEOUT_HINT[name] + 'Its output (also saved in data\\tunnel.log):\n' + log.slice(-1500)), 90_000);
     const onData = (d) => {
       const chunk = d.toString();
       log += chunk;
       try { appendFileSync(logFile, chunk); } catch { /* */ }
       if (done) return;
-      const m = re.exec(log);
-      if (m && readyRe.test(log)) { done = true; clearTimeout(timer); resolve(toUrl(m)); }
+      const m = urlRe.exec(log);
+      if (m && readyRe.test(log)) { done = true; clearTimeout(timer); resolve({ url: toUrl(m), log }); }
     };
     proc.stdout.on('data', onData);
     proc.stderr.on('data', onData);
     proc.on('exit', (code) => {
-      const hint = /ERR_NGROK_(4018|105|107)|authtoken/i.test(log)
-        ? 'ngrok needs your (free) account token. Sign up at https://ngrok.com, copy your token from\nhttps://dashboard.ngrok.com/get-started/your-authtoken and add this line to .env:\n    NGROK_AUTHTOKEN=paste-the-token-here\nthen run start.bat again.\n\n'
-        : /ERR_NGROK_(313|320|15013)|domain/i.test(log)
-          ? 'ngrok refused the address in NGROK_DOMAIN. Copy it exactly from https://dashboard.ngrok.com/domains\n(only the part like your-name.ngrok-free.app).\n\n'
-          : '';
-      fail(`${hint}The tunnel stopped (exit code ${code}). Its output:\n` + log.slice(-1500));
+      if (proc.expectedExit) return;
+      children.delete(proc);
+      if (done) { onTunnelLost(name, code); return; }
+      clearTimeout(timer);
+      fail(`${HINTS[name](log)}The tunnel stopped (exit code ${code}). Its output (also in data\\tunnel.log):\n` + log.slice(-1500));
     });
   });
 }
 
-const publicUrl = await startTunnel();
+// If the tunnel dies later (network hiccup), bring it back; restart the bot if the address changed.
+let restartingTunnel = false;
+async function onTunnelLost(name, code) {
+  if (restartingTunnel) return;
+  restartingTunnel = true;
+  say(`\n  The tunnel (${name}) stopped (code ${code}). Reconnecting in 10 seconds...\n`);
+  await sleepMs(10_000);
+  try {
+    const url = await startTunnel();
+    if (url !== publicUrl) {
+      say(`  The address changed to ${url}; restarting the bot with it.`);
+      publicUrl = url;
+      writeFileSync(lastFile, publicUrl);
+      restartBot();
+    } else say('  Tunnel reconnected.');
+  } finally { restartingTunnel = false; }
+}
+
+let publicUrl = await startTunnel();
 mkdirSync(join(root, 'data'), { recursive: true });
 const lastFile = join(root, 'data', 'last-public-url.txt');
 const last = existsSync(lastFile) ? readFileSync(lastFile, 'utf8').trim() : '';
@@ -247,35 +340,43 @@ if (publicUrl !== last) {
 }
 say();
 
-// 4. Bot (restarted automatically if it crashes) ---------------------------------------
+// 5. Bot (restarted automatically if it crashes) ---------------------------------------
 let quickFails = 0;
+let currentBot = null;
 function startBot() {
   const started = Date.now();
   const bot = spawn(process.execPath, ['--env-file=.env', '--disable-warning=ExperimentalWarning', 'src/main.ts'], {
     cwd: root, stdio: 'inherit',
-    env: { ...process.env, PUBLIC_URL: publicUrl, PORT: String(PORT) }, // these win over .env
+    env: { ...botEnv(), PUBLIC_URL: publicUrl, PORT: String(PORT) }, // these win over .env
   });
+  currentBot = bot;
   children.add(bot);
   bot.on('exit', (code) => {
     children.delete(bot);
+    if (bot.expectedExit) { startBot(); return; }
     if (Date.now() - started < 20_000) quickFails++; else quickFails = 0;
     if (quickFails >= 2) fail('The bot keeps stopping right after it starts. Check the error above (often a wrong BOT_TOKEN or a typo in .env).');
     say(`\n  The bot stopped (code ${code}). Restarting in 5 seconds...\n`);
     setTimeout(startBot, 5000);
   });
 }
+function restartBot() {
+  if (!currentBot) return startBot();
+  currentBot.expectedExit = true;
+  currentBot.kill();
+}
 say('  Starting the bot... (send /start to it in Telegram)');
 say();
 startBot();
 
-// 5. Self-check: can the Mini App actually be reached through the tunnel? ------------------
+// 6. Self-check: can the Mini App actually be reached through the tunnel? ------------------
 (async () => {
   const deadline = Date.now() + 90_000;
   let lastErr = '';
   await sleepMs(3000);
   while (Date.now() < deadline) {
     try {
-      const r = await fetch(`${publicUrl}/healthz`, { headers: { 'ngrok-skip-browser-warning': '1' }, signal: AbortSignal.timeout(8000) });
+      const r = await fetch(`${publicUrl}/healthz`, { headers: { 'tuna-skip-browser-warning': '1', 'ngrok-skip-browser-warning': '1' }, signal: AbortSignal.timeout(8000) });
       const j = await r.json().catch(() => null);
       if (r.ok && j && j.ok) { say(`\n  [OK] The Mini App is reachable: ${publicUrl}\n`); return; }
       lastErr = `HTTP ${r.status}`;
@@ -287,7 +388,7 @@ startBot();
     'WARNING: could not reach the Mini App through the tunnel',
     `(${publicUrl} -> ${lastErr})`,
     'The bot works in the chat, but "Open App" may show an error.',
-    'Try restarting start.bat, or a VPN, or ngrok (NGROK_DOMAIN).',
+    'Try restarting start.bat. Tunnel used: ' + TUNNEL + '.',
     'Tunnel log: data\\tunnel.log',
   ]);
   say();
