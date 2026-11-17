@@ -9,7 +9,16 @@ import { localNow } from '../time.ts';
 import type { Task } from '../tasks.ts';
 import type { Ctx } from '../services/context.ts';
 import { ConflictError, NotFoundError, ValidationError, type TaskService } from '../services/tasks.ts';
-import { verifyInitData } from './auth.ts';
+import { checkInitData } from './auth.ts';
+
+// Log auth failures, but at most once a minute per message (a page retries on every focus).
+const authLogged = new Map<string, number>();
+function logAuth(msg: string) {
+  const now = Date.now();
+  if ((authLogged.get(msg) ?? 0) > now - 60_000) return;
+  authLogged.set(msg, now);
+  log.warn(msg);
+}
 
 const STATIC_DIR = fileURLToPath(new URL('../../build/webapp/', import.meta.url));
 const TYPES: Record<string, string> = {
@@ -61,9 +70,16 @@ const optVersion = (b: Record<string, unknown>) => (typeof b.version === 'number
 export async function handleApi(deps: ApiDeps, method: string, path: string, query: URLSearchParams, authHeader: string | undefined,
   body: () => Promise<Record<string, unknown>>): Promise<{ status: number; body: unknown }> {
   const m = /^tma (.+)$/.exec(authHeader || '');
-  const auth = m ? verifyInitData(m[1], deps.botToken, deps.ctx.now()) : null;
-  if (!auth) throw new HttpError(401, { error: 'unauthorized' });
-  if (!deps.allowed.has(auth.user.id)) throw new HttpError(403, { error: 'forbidden' });
+  const check = checkInitData(m ? m[1].trim() : '', deps.botToken, deps.ctx.now());
+  if (!('ok' in check)) {
+    logAuth(`Mini App request rejected: ${check.reason === 'missing' ? 'no Telegram launch data (opened outside Telegram, or lost behind a tunnel warning page)' : check.reason}`);
+    throw new HttpError(401, { error: 'unauthorized', reason: check.reason });
+  }
+  const auth = check.ok;
+  if (!deps.allowed.has(auth.user.id)) {
+    logAuth(`Mini App request from Telegram user ${auth.user.id}, who is not in ALLOWED_USER_IDS`);
+    throw new HttpError(403, { error: 'forbidden', user_id: auth.user.id });
+  }
   const userId = auth.user.id;
   deps.tasks.ensureUser(userId);
   const { tasks } = deps;

@@ -7,7 +7,7 @@ export type Mutation = { task: ApiTask; state: ServerState };
 
 export class ApiError extends Error {
   status: number;
-  body: { error?: string; task?: ApiTask | null };
+  body: { error?: string; task?: ApiTask | null; reason?: string; user_id?: number };
   constructor(status: number, body: ApiError['body']) { super(body.error || `HTTP ${status}`); this.status = status; this.body = body; }
 }
 

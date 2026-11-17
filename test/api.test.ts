@@ -27,8 +27,15 @@ test('API: auth, CRUD, conflicts, history', async () => {
     handleApi(deps, method, path, new URLSearchParams(path.split('?')[1] || ''), a, async () => (body ?? {}) as Record<string, unknown>)
       .catch((e) => ({ status: e.status ?? (e.constructor.name === 'ConflictError' ? 409 : e.constructor.name === 'ValidationError' ? 400 : 500), body: e.body ?? e.message }));
 
-  assert.equal((await call('GET', '/api/state', undefined, 'tma nope')).status, 401);
-  assert.equal((await call('GET', '/api/state', undefined, `tma ${init(777, h.clock.t / 1000)}`)).status, 403);
+  const missing = await call('GET', '/api/state', undefined, 'tma ');
+  assert.equal(missing.status, 401);
+  assert.equal((missing.body as any).reason, 'missing', 'launch data lost (e.g. behind a tunnel warning page)');
+  assert.equal(((await call('GET', '/api/state', undefined, 'tma nope')).body as any).reason, 'malformed');
+  const wrongBot = await call('GET', '/api/state', undefined, `tma ${signInitData({ auth_date: String(Math.floor(h.clock.t / 1000)), user: JSON.stringify({ id: USER }) }, '999:other-bot')}`);
+  assert.equal((wrongBot.body as any).reason, 'bad-signature');
+  const stranger = await call('GET', '/api/state', undefined, `tma ${init(777, h.clock.t / 1000)}`);
+  assert.equal(stranger.status, 403);
+  assert.equal((stranger.body as any).user_id, 777, 'tells the person their id so it can be allowed');
 
   const st = await call('GET', '/api/state');
   assert.equal(st.status, 200);

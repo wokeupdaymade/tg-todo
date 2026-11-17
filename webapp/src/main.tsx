@@ -15,6 +15,25 @@ type Tab = 'today' | 'other';
 type Sheet = { kind: 'add' } | { kind: 'edit'; task: ApiTask; focusDate?: boolean } | { kind: 'history' } | null;
 type Toast = { id: number; text: string; undo?: () => void } | null;
 
+/** Tells the person exactly why the app can't load, so it can be fixed. */
+function describeLoadError(e: unknown): string {
+  if (!(e instanceof ApiError)) return 'Couldn\'t reach the server. Check that start.bat is running, then reopen the app.';
+  if (e.status === 403) {
+    return `Your Telegram account (id ${e.body.user_id ?? '?'}) isn't allowed. Put this id in ALLOWED_USER_IDS in .env and restart start.bat.`;
+  }
+  if (e.status === 401) {
+    if (e.body.reason === 'missing' || !initData()) {
+      return 'Telegram\'s login data didn\'t reach the app. This happens once after the tunnel\'s warning page. Close the app and open it again from the bot.';
+    }
+    if (e.body.reason === 'bad-signature') {
+      return 'Telegram\'s login data doesn\'t match this bot. Open the app from the same bot whose token is in BOT_TOKEN.';
+    }
+    if (e.body.reason === 'expired') return 'This session is too old. Close the app and open it again from the bot.';
+    return 'Telegram\'s login data was unreadable. Close the app and open it again from the bot.';
+  }
+  return 'Couldn\'t reach the server. Check that start.bat is running, then reopen the app.';
+}
+
 function App() {
   const [srv, setSrv] = useState<ServerState | null>(null);
   const [offset, setOffset] = useState(0);          // server clock − device clock
@@ -39,8 +58,7 @@ function App() {
 
   const refresh = useCallback(async () => {
     try { accept(await api.state()); } catch (e) {
-      setLoadError(e instanceof ApiError && (e.status === 401 || e.status === 403)
-        ? 'This app only works when opened from the bot in Telegram.' : 'Couldn\'t reach the server. Reopen the app to retry.');
+      setLoadError(describeLoadError(e));
     }
   }, [accept]);
 

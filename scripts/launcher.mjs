@@ -80,7 +80,7 @@ const envFile = join(root, '.env');
 if (!existsSync(envFile)) {
   copyFileSync(join(root, '.env.example'), envFile);
   if (isWin) spawn('notepad', [envFile], { detached: true, stdio: 'ignore' }).unref();
-  fail('First run: I created the settings file ".env" (it should open in Notepad).\nFill in BOT_TOKEN, ALLOWED_USER_IDS and DEFAULT_TZ, save it, then run start.bat again.');
+  fail('First run: I created the settings file ".env" (it should open in Notepad).\nFill in the 4 lines under "Required" (BOT_TOKEN, ALLOWED_USER_IDS, DEFAULT_TZ, TUNA_API_KEY),\nsave it, then run start.bat again.');
 }
 // Notepad may save a UTF-8 BOM, which would hide the first setting from Node.
 {
@@ -89,6 +89,7 @@ if (!existsSync(envFile)) {
 }
 const env = readEnv(envFile);
 if (!env.BOT_TOKEN || /replace-me/.test(env.BOT_TOKEN)) fail('Put your bot token from @BotFather into BOT_TOKEN in the .env file.');
+if ((env.TUNNEL || 'tuna').toLowerCase() === 'tuna' && !env.TUNA_API_KEY) say('  (!) TUNA_API_KEY is empty in .env: Tuna will only work if you logged in with "tuna login" on this machine.');
 if (!env.ALLOWED_USER_IDS || env.ALLOWED_USER_IDS === '111111111') fail('Put your Telegram user id (ask @userinfobot) into ALLOWED_USER_IDS in the .env file.');
 
 // 1b. One copy at a time ----------------------------------------------------------------
