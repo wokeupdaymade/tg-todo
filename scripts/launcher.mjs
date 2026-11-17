@@ -160,8 +160,11 @@ run(process.execPath, ['scripts/build.ts'], 'Build');
 
 // 3. Tunnel (gives the Mini App the HTTPS address Telegram requires) ------------------
 async function startTunnel() {
-  if (env.NGROK_DOMAIN) {
-    const domain = env.NGROK_DOMAIN.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  const tunnel = (env.TUNNEL || 'ngrok').toLowerCase();
+  if (tunnel !== 'cloudflared') {
+    // ngrok (default): the free plan gives one permanent address, used automatically.
+    const domain = (env.NGROK_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    const token = (env.NGROK_AUTHTOKEN || '').trim();
     let ngrok = findExe('ngrok');
     if (!ngrok && isWin) {
       say('  ngrok not found; installing it with winget (one time)...');
@@ -169,10 +172,14 @@ async function startTunnel() {
       ngrok = findExe('ngrok', [join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'ngrok.exe')]);
     }
     if (!ngrok) fail('ngrok is not installed (or a new window is needed after installing it).\nInstall it from https://ngrok.com/download, then run start.bat again.');
-    say(`  Starting tunnel (ngrok, ${domain})...`);
-    const p = spawn(ngrok, ['http', `--url=${domain}`, String(PORT), '--log=stdout'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    say(`  Starting tunnel (ngrok${domain ? ', ' + domain : ''})...`);
+    const args = ['http', String(PORT), '--log=stdout'];
+    if (domain) args.push(`--url=${domain}`);
+    if (token) args.push(`--authtoken=${token}`);
+    const p = spawn(ngrok, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
     children.add(p);
-    return await waitForUrl(p, 'ngrok', () => `https://${domain}`, /started tunnel|url=https:/i, /started tunnel|url=https:/i);
+    const urlRe = /url=(https:\/\/[^\s"]+)/i;
+    return await waitForUrl(p, 'ngrok', (m) => m[1].replace(/\/+$/, ''), urlRe, /started tunnel/i);
   }
   let cf = findExe('cloudflared', ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']);
   if (!cf && isWin) {
@@ -209,8 +216,8 @@ function waitForUrl(proc, name, toUrl, re, readyRe) {
     proc.stdout.on('data', onData);
     proc.stderr.on('data', onData);
     proc.on('exit', (code) => {
-      const hint = /ERR_NGROK_4018|authtoken/i.test(log)
-        ? 'ngrok needs your account token once. Copy the command from https://dashboard.ngrok.com/get-started/your-authtoken\n(it looks like: ngrok config add-authtoken 2abc...), run it in a terminal, then start.bat again.\n\n'
+      const hint = /ERR_NGROK_(4018|105|107)|authtoken/i.test(log)
+        ? 'ngrok needs your (free) account token. Sign up at https://ngrok.com, copy your token from\nhttps://dashboard.ngrok.com/get-started/your-authtoken and add this line to .env:\n    NGROK_AUTHTOKEN=paste-the-token-here\nthen run start.bat again.\n\n'
         : /ERR_NGROK_(313|320|15013)|domain/i.test(log)
           ? 'ngrok refused the address in NGROK_DOMAIN. Copy it exactly from https://dashboard.ngrok.com/domains\n(only the part like your-name.ngrok-free.app).\n\n'
           : '';

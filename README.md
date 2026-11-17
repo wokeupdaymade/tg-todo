@@ -49,11 +49,12 @@ No public address? Run the `bot` service alone and expose port 8080 through a tu
 ### On a Windows PC (one click)
 
 1. Install **Node.js 22 LTS** (22.18+) from nodejs.org.
-2. Double-click **`start.bat`**. On the first run it creates `.env` and opens it in Notepad: fill in `BOT_TOKEN`, `ALLOWED_USER_IDS`, `DEFAULT_TZ`, save, and double-click `start.bat` again.
-3. It installs what it needs (including `cloudflared` via winget), builds, opens an HTTPS tunnel, and starts the bot. If the Mini App address changed, it shows it (and copies it to the clipboard). Paste it in BotFather → *Configure Mini App*.
-4. **Close the window to stop the bot.** If the bot crashes it restarts by itself.
+2. Sign up at https://ngrok.com (free) and copy your token from https://dashboard.ngrok.com/get-started/your-authtoken.
+3. Double-click **`start.bat`**. On the first run it creates `.env` and opens it in Notepad: fill in `BOT_TOKEN`, `ALLOWED_USER_IDS`, `DEFAULT_TZ` and `NGROK_AUTHTOKEN`, save, and double-click `start.bat` again.
+4. It installs what it needs (ngrok via winget), builds, opens the tunnel, starts the bot and checks that the Mini App is reachable. Your ngrok address stays the same: paste it once in BotFather → *Configure Mini App*.
+5. **Close the window to stop the bot.** If the bot crashes it restarts by itself.
 
-The free tunnel address changes on every start. For a fixed one, get a free static domain from ngrok, run `ngrok config add-authtoken …` once, and set `NGROK_DOMAIN` in `.env`. The bot only runs (and reminds) while the PC is on.
+Free ngrok addresses show a one-time "Visit Site" warning page when the Mini App opens. `TUNNEL=cloudflared` in `.env` uses Cloudflare's free tunnel instead (no warning page, but a new address on every start). The bot only runs, and reminds you, while the PC is on.
 
 ### Without Docker
 
