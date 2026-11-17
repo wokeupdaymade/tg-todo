@@ -4,7 +4,7 @@
 // Plain .mjs on purpose: it must run (and explain) even on an old Node version.
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -172,7 +172,7 @@ async function startTunnel() {
     say(`  Starting tunnel (ngrok, ${domain})...`);
     const p = spawn(ngrok, ['http', `--url=${domain}`, String(PORT), '--log=stdout'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
     children.add(p);
-    return await waitForUrl(p, () => `https://${domain}`, /started tunnel|url=https:/i);
+    return await waitForUrl(p, 'ngrok', () => `https://${domain}`, /started tunnel|url=https:/i, /started tunnel|url=https:/i);
   }
   let cf = findExe('cloudflared', ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']);
   if (!cf && isWin) {
@@ -181,20 +181,30 @@ async function startTunnel() {
     cf = findExe('cloudflared', ['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'C:\\Program Files\\cloudflared\\cloudflared.exe']);
   }
   if (!cf) fail('cloudflared is not installed. Run:  winget install --id Cloudflare.cloudflared\nthen start.bat again.');
-  say('  Starting tunnel (cloudflared)...');
-  const p = spawn(cf, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  say('  Starting tunnel (cloudflared)... this can take up to a minute');
+  // http2 runs over TCP 443, which gets through networks that block or throttle QUIC/UDP.
+  const p = spawn(cf, ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', `http://localhost:${PORT}`], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
   children.add(p);
-  return await waitForUrl(p, (m) => m[0], /https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+  // The address is printed before the connection to Cloudflare exists: wait for both.
+  return await waitForUrl(p, 'cloudflared', (m) => m[0], /https:\/\/[a-z0-9-]+\.trycloudflare\.com/, /Registered tunnel connection/i);
 }
 
-function waitForUrl(proc, toUrl, re) {
+function waitForUrl(proc, name, toUrl, re, readyRe) {
   return new Promise((resolve) => {
-    let log = '';
-    const timer = setTimeout(() => fail('The tunnel did not start within 60 seconds. Its output:\n' + log.slice(-1500)), 60_000);
+    let log = '', done = false;
+    const logFile = join(root, 'data', 'tunnel.log');
+    writeFileSync(logFile, `--- ${new Date().toISOString()} ${name}\n`);
+    const timer = setTimeout(() => fail(
+      (name === 'cloudflared'
+        ? 'cloudflared could not connect to Cloudflare within 90 seconds. Your internet provider may be blocking\nor slowing Cloudflare. Try again, try with a VPN on, or use ngrok instead (NGROK_DOMAIN in .env).\n\n'
+        : 'The tunnel did not start within 90 seconds.\n\n') + 'Its output (also saved in data\\tunnel.log):\n' + log.slice(-1500)), 90_000);
     const onData = (d) => {
-      log += d.toString();
+      const chunk = d.toString();
+      log += chunk;
+      try { appendFileSync(logFile, chunk); } catch { /* */ }
+      if (done) return;
       const m = re.exec(log);
-      if (m) { clearTimeout(timer); resolve(toUrl(m)); }
+      if (m && readyRe.test(log)) { done = true; clearTimeout(timer); resolve(toUrl(m)); }
     };
     proc.stdout.on('data', onData);
     proc.stderr.on('data', onData);
@@ -250,3 +260,28 @@ function startBot() {
 say('  Starting the bot... (send /start to it in Telegram)');
 say();
 startBot();
+
+// 5. Self-check: can the Mini App actually be reached through the tunnel? ------------------
+(async () => {
+  const deadline = Date.now() + 90_000;
+  let lastErr = '';
+  await sleepMs(3000);
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(`${publicUrl}/healthz`, { headers: { 'ngrok-skip-browser-warning': '1' }, signal: AbortSignal.timeout(8000) });
+      const j = await r.json().catch(() => null);
+      if (r.ok && j && j.ok) { say(`\n  [OK] The Mini App is reachable: ${publicUrl}\n`); return; }
+      lastErr = `HTTP ${r.status}`;
+    } catch (e) { lastErr = e?.cause?.code || e?.message || String(e); }
+    await sleepMs(4000);
+  }
+  say();
+  banner([
+    'WARNING: could not reach the Mini App through the tunnel',
+    `(${publicUrl} -> ${lastErr})`,
+    'The bot works in the chat, but "Open App" may show an error.',
+    'Try restarting start.bat, or a VPN, or ngrok (NGROK_DOMAIN).',
+    'Tunnel log: data\\tunnel.log',
+  ]);
+  say();
+})();
