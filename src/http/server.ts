@@ -115,7 +115,7 @@ export function startHttp(deps: ApiDeps, port: number): Server {
         const r = await handleApi(deps, req.method || 'GET', url.pathname, url.searchParams, req.headers.authorization, () => readJson(req));
         return send(res, r.status, r.body);
       }
-      if (url.pathname === '/healthz') return send(res, 200, { ok: true });
+      if (url.pathname === '/healthz') return send(res, 200, { ok: true, app: 'tg-todo', pid: process.pid });
       return await serveStatic(url.pathname, res);
     } catch (e) {
       if (e instanceof HttpError) return send(res, e.status, e.body);
@@ -125,6 +125,12 @@ export function startHttp(deps: ApiDeps, port: number): Server {
       log.error(`http ${req.method} ${url.pathname} failed`, e);
       return send(res, 500, { error: 'internal error' });
     }
+  });
+  server.on('error', (e: NodeJS.ErrnoException) => {
+    log.error(e.code === 'EADDRINUSE'
+      ? `port ${port} is already in use: another copy of the bot (or another program) is running. Close it, or set PORT to a free port.`
+      : `http server failed: ${e.message}`);
+    process.exit(3);
   });
   server.listen(port, () => log.info(`http listening on :${port}`));
   return server;

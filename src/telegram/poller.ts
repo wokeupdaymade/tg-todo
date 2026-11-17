@@ -1,7 +1,7 @@
 // Long polling. Updates are processed strictly in order, one at a time, which
 // keeps flow and preview state free of races for a single-user bot.
 import { log } from '../log.ts';
-import { type BotApi, type Update, sleep } from './api.ts';
+import { type BotApi, TelegramError, type Update, sleep } from './api.ts';
 
 export class Poller {
   private api: BotApi;
@@ -26,7 +26,11 @@ export class Poller {
         }, { timeoutMs: 40000 });
         backoff = 1000;
       } catch (e) {
-        log.warn(`getUpdates failed; retrying in ${backoff / 1000}s`, e instanceof Error ? e.message : e);
+        if (e instanceof TelegramError && e.code === 409) {
+          log.error('Another copy of this bot is running with the same token (Telegram: "terminated by other getUpdates request"). Close the other one.');
+        } else {
+          log.warn(`getUpdates failed; retrying in ${backoff / 1000}s`, e instanceof Error ? e.message : e);
+        }
         await sleep(backoff);
         backoff = Math.min(backoff * 2, 30000);
         continue;

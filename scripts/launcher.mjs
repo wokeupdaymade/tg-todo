@@ -3,13 +3,14 @@
 // crashes. Closing the console window stops everything.
 // Plain .mjs on purpose: it must run (and explain) even on an old Node version.
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const isWin = process.platform === 'win32';
-const PORT = 8080;
+let PORT = 8080;
 const children = new Set();
 
 const say = (s = '') => console.log(s);
@@ -89,6 +90,65 @@ if (!existsSync(envFile)) {
 const env = readEnv(envFile);
 if (!env.BOT_TOKEN || /replace-me/.test(env.BOT_TOKEN)) fail('Put your bot token from @BotFather into BOT_TOKEN in the .env file.');
 if (!env.ALLOWED_USER_IDS || env.ALLOWED_USER_IDS === '111111111') fail('Put your Telegram user id (ask @userinfobot) into ALLOWED_USER_IDS in the .env file.');
+
+// 1b. One copy at a time ----------------------------------------------------------------
+// Another open start.bat window? Then don't fight it.
+mkdirSync(join(root, 'data'), { recursive: true });
+const lockFile = join(root, 'data', 'launcher.pid');
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+if (existsSync(lockFile)) {
+  const other = Number(readFileSync(lockFile, 'utf8'));
+  if (other && other !== process.pid && alive(other)) {
+    fail('The bot is already running in another start.bat window.\nUse that window, or close it and run start.bat again.');
+  }
+}
+writeFileSync(lockFile, String(process.pid));
+process.on('exit', () => { try { if (readFileSync(lockFile, 'utf8') === String(process.pid)) writeFileSync(lockFile, ''); } catch { /* */ } });
+
+const portFree = (port) => new Promise((resolve) => {
+  const srv = createServer().once('error', () => resolve(false)).once('listening', () => srv.close(() => resolve(true)));
+  srv.listen(port);
+});
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** PID of the process listening on a TCP port (Windows), and whether it is node.exe. */
+function listenerOnPort(port) {
+  if (!isWin) return null;
+  const out = spawnSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8' }).stdout || '';
+  // Listening sockets have a remote address of 0.0.0.0:0 / [::]:0. (The state word is translated on non-English Windows.)
+  const re = new RegExp(`^\\s*TCP\\s+\\S+:${port}\\s+(?:0\\.0\\.0\\.0:0|\\[::\\]:0)\\s+\\S+\\s+(\\d+)\\s*$`, 'i');
+  const m = out.split(/\r?\n/).map((l) => re.exec(l)).find(Boolean);
+  if (!m) return null;
+  const pid = Number(m[1]);
+  const name = (spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8' }).stdout || '').split(',')[0].replace(/"/g, '').trim();
+  return { pid, isNode: /^node(\.exe)?$/i.test(name) };
+}
+
+/** A bot left over from an earlier run (its window is gone) holds the port: stop it. Otherwise pick another port. */
+async function choosePort() {
+  if (await portFree(PORT)) return;
+  let ours = null;
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/healthz`, { signal: AbortSignal.timeout(2000) });
+    const j = await r.json();
+    if (j && j.ok === true) {
+      if (j.pid) ours = j.pid;                       // this version reports its process id
+      else { const l = listenerOnPort(PORT); if (l?.isNode) ours = l.pid; } // older versions: ask netstat
+    }
+  } catch { /* not ours */ }
+  if (ours) {
+    say(`  A copy of the bot from an earlier run is still running (process ${ours}); stopping it...`);
+    if (isWin) spawnSync('taskkill', ['/PID', String(ours), '/T', '/F'], { stdio: 'ignore' });
+    else { try { process.kill(ours); } catch { /* gone */ } }
+    for (let i = 0; i < 20 && !(await portFree(PORT)); i++) await sleepMs(250);
+    if (await portFree(PORT)) return;
+  }
+  for (let p = 8081; p <= 8099; p++) {
+    if (await portFree(p)) { say(`  Port ${PORT} is used by another program; using port ${p} instead.`); PORT = p; return; }
+  }
+  fail(`Ports 8080-8099 are all in use. Close some programs and run start.bat again.`);
+}
+await choosePort();
 
 // 2. Install & build --------------------------------------------------------------
 if (!existsSync(join(root, 'node_modules'))) {
