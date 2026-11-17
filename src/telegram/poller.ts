@@ -22,7 +22,7 @@ export class Poller {
       let updates: Update[];
       try {
         updates = await this.api.call<Update[]>('getUpdates', {
-          offset: this.offset, timeout: 25, allowed_updates: ['message', 'widget_query', 'shared_widget_query'],
+          offset: this.offset, timeout: 25, allowed_updates: ['message', 'callback_query', 'widget_query', 'shared_widget_query'],
         }, { timeoutMs: 40000 });
         backoff = 1000;
       } catch (e) {

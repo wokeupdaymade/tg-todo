@@ -8,11 +8,13 @@ import { TelegramError } from '../telegram/api.ts';
 import { bytes, widget } from '../widgets/index.ts';
 import { type Ctx, HOUR, safeDelete } from './context.ts';
 import type { TaskService } from './tasks.ts';
+import { renderPreviewText, type UiMode } from './ui.ts';
 
 export const UNDO_WINDOW = 5000;
 export const ROLL_AFTER = 46.5 * HOUR;      // resend before the 48 h deletion limit
 const MAX_DATA = 1000;                      // stay under the 1024-byte chat state limit
 const PER_SECTION = 3, SINGLE_SECTION = 6;
+export const TEXT_HASH = 'text-v1';          // previews.html_hash for the inline-keyboard fallback
 
 type PreviewRow = { user_id: number; message_id: number; sent_at: number; html_hash: string; revision: number; last_data: string | null };
 
@@ -81,10 +83,12 @@ export class PreviewService {
   private timers = new Map<number, NodeJS.Timeout>();
   private running = new Map<number, Promise<void>>();
   private dirty = new Set<number>();
+  private ui: UiMode;
 
-  constructor(ctx: Ctx, tasks: TaskService) {
+  constructor(ctx: Ctx, tasks: TaskService, ui: UiMode) {
     this.ctx = ctx;
     this.tasks = tasks;
+    this.ui = ui;
     tasks.onChange(({ userId, kind }) => {
       this.schedule(userId);
       // Hide a completed row once its undo window ends.
@@ -147,15 +151,21 @@ export class PreviewService {
   private async refreshOnce(userId: number) {
     const row = this.row(userId);
     if (!row) return this.resendNow(userId);
-    const { hash } = widget('preview');
-    if (row.html_hash !== hash || this.ctx.now() - row.sent_at >= ROLL_AFTER) return this.resendNow(userId);
+    if (row.html_hash !== this.expectedHash() || this.ctx.now() - row.sent_at >= ROLL_AFTER) return this.resendNow(userId);
 
-    const probe = this.data(userId, row.revision);
+    const isText = row.html_hash === TEXT_HASH;
+    const probe = this.content(userId, row.revision, isText);
     if (row.last_data && sameContent(row.last_data, probe)) return;
     const revision = row.revision + 1;
-    const json = JSON.stringify({ ...probe, r: revision });
+    const next = { ...probe, r: revision };
+    const json = JSON.stringify(next);
     try {
-      await this.ctx.tg.editWidgetData(userId, row.message_id, json);
+      if (isText) {
+        const { text, markup } = renderPreviewText(next, this.ctx.cfg.publicUrl);
+        await this.ctx.tg.editText(userId, row.message_id, text, markup);
+      } else {
+        await this.ctx.tg.editWidgetData(userId, row.message_id, json);
+      }
     } catch (e) {
       if (e instanceof TelegramError && e.notModified) { /* already current */ }
       else if (e instanceof TelegramError && e.code === 400) {
@@ -176,15 +186,42 @@ export class PreviewService {
     return p;
   }
 
+  private expectedHash(): string {
+    return this.ui.forPreview() === 'widget' ? widget('preview').hash : TEXT_HASH;
+  }
+
+  /** Preview state; the text fallback also tracks the Mini App URL (its button changes with it). */
+  private content(userId: number, revision: number, isText: boolean): PreviewData & { u?: string } {
+    const d = this.data(userId, revision);
+    return isText ? { ...d, u: this.ctx.cfg.publicUrl } : d;
+  }
+
   private async resendNow(userId: number) {
     const old = this.row(userId);
-    const { html, hash } = widget('preview');
     const revision = (old?.revision ?? 0) + 1;
-    const json = JSON.stringify(this.data(userId, revision));
-    const msg = await this.ctx.tg.sendWidget({
-      chat_id: userId, html, chat_data: json, allow_queries: true, disable_notification: true,
-      caption: '📋 Your tasks — open the app to see everything',
-    });
+    let msg: { message_id: number } | null = null;
+    let hash = TEXT_HASH;
+    let json = '';
+    if (this.ui.forPreview() === 'widget') {
+      const w = widget('preview');
+      json = JSON.stringify(this.content(userId, revision, false));
+      try {
+        msg = await this.ctx.tg.sendWidget({
+          chat_id: userId, html: w.html, chat_data: json, allow_queries: true, disable_notification: true,
+          caption: '📋 Your tasks — open the app to see everything',
+        });
+        hash = w.hash;
+        this.ui.succeeded();
+      } catch (e) {
+        if (!this.ui.blocked(e)) throw e;
+      }
+    }
+    if (!msg) {
+      const content = this.content(userId, revision, true);
+      json = JSON.stringify(content);
+      const { text, markup } = renderPreviewText(content, this.ctx.cfg.publicUrl);
+      msg = await this.ctx.tg.sendText(userId, text, markup, { disable_notification: true });
+    }
     const now = this.ctx.now();
     tx(this.ctx.db, () => {
       this.ctx.db.prepare(`INSERT INTO previews (user_id, message_id, sent_at, html_hash, revision, last_data) VALUES (?, ?, ?, ?, ?, ?)
@@ -200,8 +237,12 @@ export class PreviewService {
       if (!gone) {
         // Past the deletion window (e.g. after downtime): flip the stranded copy to its "superseded" view.
         try {
-          const stale = JSON.parse(old.last_data || '{}');
-          await this.ctx.tg.editWidgetData(userId, old.message_id, JSON.stringify({ ...stale, r: (old.revision ?? 0) + 1, x: 1 }));
+          if (old.html_hash === TEXT_HASH) {
+            await this.ctx.tg.editText(userId, old.message_id, '📋 <i>This preview is out of date — the current one is further down.</i>');
+          } else {
+            const stale = JSON.parse(old.last_data || '{}');
+            await this.ctx.tg.editWidgetData(userId, old.message_id, JSON.stringify({ ...stale, r: (old.revision ?? 0) + 1, x: 1 }));
+          }
         } catch (e) { log.warn('could not mark old preview as superseded', e instanceof Error ? e.message : e); }
       }
     }
@@ -217,11 +258,11 @@ export class PreviewService {
   }
 }
 
-function sameContent(lastJson: string, next: PreviewData): boolean {
+function sameContent(lastJson: string, next: PreviewData & { u?: string }): boolean {
   try {
     const a = JSON.parse(lastJson);
     delete a.r;
-    const b: Partial<PreviewData> = { ...next };
+    const b: Partial<PreviewData & { u?: string }> = { ...next };
     delete b.r;
     return JSON.stringify(a) === JSON.stringify(b);
   } catch { return false; }

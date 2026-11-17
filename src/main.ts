@@ -10,6 +10,7 @@ import { TaskService } from './services/tasks.ts';
 import { ReminderService } from './services/reminders.ts';
 import { PreviewService } from './services/preview.ts';
 import { FlowService } from './services/flows.ts';
+import { UiMode } from './services/ui.ts';
 import { Router } from './bot/router.ts';
 import { startHttp } from './http/server.ts';
 import { widget } from './widgets/index.ts';
@@ -27,9 +28,10 @@ async function main() {
 
   const ctx: Ctx = { cfg, db, tg, now: () => Date.now(), botUsername: me.username };
   const tasks = new TaskService(ctx);
-  const reminders = new ReminderService(ctx, tasks);
-  const preview = new PreviewService(ctx, tasks);
-  const flows = new FlowService(ctx, tasks);
+  const ui = new UiMode(ctx, cfg.widgets);
+  const reminders = new ReminderService(ctx, tasks, ui);
+  const preview = new PreviewService(ctx, tasks, ui);
+  const flows = new FlowService(ctx, tasks, ui);
   const router = new Router(ctx, { tasks, reminders, preview, flows }, cfg.allowedUserIds);
 
   // Bot chrome: the "Open App" menu button and the command list.

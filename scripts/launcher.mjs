@@ -146,12 +146,12 @@ say();
 if (publicUrl !== last) {
   const copied = copyToClipboard(publicUrl);
   banner([
-    'The Mini App address is NEW:',
+    'New Mini App address:',
     publicUrl,
-    copied ? '(already copied to the clipboard)' : '',
-    'In @BotFather: your bot > Bot Settings > Configure Mini App',
-    '> Edit Mini App URL > paste it. (The "Open App" menu button',
-    'updates by itself; tapping tasks in the chat preview needs this.)',
+    copied ? '(copied to the clipboard)' : '',
+    'The "Open App" buttons in the chat update by themselves.',
+    'Optional: paste it in @BotFather > your bot > Bot Settings >',
+    'Configure Mini App, for the Open button in the bot\'s profile.',
   ].filter(Boolean));
 } else {
   say(`  Mini App address unchanged: ${publicUrl}`);

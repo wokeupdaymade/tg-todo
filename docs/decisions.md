@@ -10,6 +10,15 @@ Decisions taken while building v1, where the spec was open, contradictory, or si
 - **Time zone**: `DEFAULT_TZ` at first contact, changed with `/settings <IANA name | UTC±H>`. Changing it re-arms all reminders.
 - **UI language** English; times displayed 24 h; AM/PM accepted as typed input. Calendar weeks start on Monday.
 
+## Widget fallback (added 17 Nov 2026)
+- Since 13 Nov 2026 Telegram refuses `sendWidget` from ordinary bots with `INPUT_MEDIA_WIDGET_NOT_ALLOWED`, even in private chats. The docs don't mention it; there is no announced date for lifting it.
+- With `WIDGETS=auto` (default) the bot tries widgets. On that error it switches to the spec's fallback: plain messages with inline keyboards, carrying the same action strings as the widget requests and handled by the same code. It tries widgets again 12 h later (and at every start). Once a widget is accepted, the preview switches back by itself. `WIDGETS=off` forces the fallback; `WIDGETS=on` disables it.
+- Fallback preview: an HTML text message (☑️/▫️ list, ❗ for late times) with one ✓ button per task (↩️ Undo during the undo window) and an "Open App" web-app button. It is edited in place, so Telegram shows it as "edited".
+- The "Open App" button always carries the current `PUBLIC_URL` and is updated when the address changes. With the free tunnel, BotFather's URL is then only needed for the Open button in the bot's profile.
+- Fallback creation flow: one message with Today / Tomorrow / Other Date… / Cancel. Other Date opens a month calendar (past days shown as "·", today as "•16"). The time step has No Specific Time / Select Time… → 6×4 hour grid → 3×4 grid of 5-minute steps. Typed dates/times work as before.
+- No reply keyboard in fallback mode: it would only duplicate the inline buttons and add a prompt message. Typed shortcut labels ("Today", "Other Date", "18:00"…) still work.
+- Fallback reminders: a text message (with sound) with ✓ Done / Snooze 15 min / Dismiss.
+
 ## Parser (§6.3)
 - A lone 1–2 digit number in the time step is a whole hour (`18` → 18:00). `today`/`tomorrow` accepted as dates. Weekday names are not (ambiguous when today is that weekday).
 - `29.02` without a year → next Feb 29.
@@ -33,4 +42,4 @@ Decisions taken while building v1, where the spec was open, contradictory, or si
 - Swipe a row left for Reschedule / Delete (the swipe must start ≥ 20 px from the left edge). Native `<input type=time>` (iOS wheel) plus typed entry with the shared parser.
 
 ## Platform notes
-- Bot API 10.4 widgets were verified against the live docs (snapshot in `docs/telegram-widgets-reference.txt`). Not yet verified on a real Telegram client: **first real-device test pending** (needs the bot token and a deployed HTTPS URL).
+- Bot API 10.4 widgets were verified against the live docs (snapshot in `docs/telegram-widgets-reference.txt`). The first real run (17 Nov 2026) hit the widget block above, hence the fallback.

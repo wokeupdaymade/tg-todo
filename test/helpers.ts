@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 // Test harness: in-memory DB, controllable clock, fake Telegram Bot API.
 import { openDb } from '../src/db.ts';
 import { Tg, TelegramError, type BotApi, type Update } from '../src/telegram/api.ts';
@@ -7,6 +8,7 @@ import { ReminderService } from '../src/services/reminders.ts';
 import { PreviewService } from '../src/services/preview.ts';
 import { FlowService } from '../src/services/flows.ts';
 import { Router } from '../src/bot/router.ts';
+import { UiMode, type WidgetSetting } from '../src/services/ui.ts';
 
 export type Call = { method: string; params: Record<string, any>; result: any };
 
@@ -15,8 +17,14 @@ export class FakeApi implements BotApi {
   nextId = 1000;
   live = new Set<number>();           // message ids currently in the chat
   failDelete = new Set<number>();
+  blockWidgets = false;
   async call<T>(method: string, params: Record<string, any> = {}): Promise<T> {
     let result: any = true;
+    if (method === 'sendWidget' && this.blockWidgets) {
+      this.calls.push({ method: 'sendWidget!refused', params, result: null });
+      throw new TelegramError(method, 400, 'Bad Request: INPUT_MEDIA_WIDGET_NOT_ALLOWED');
+    }
+    if (method === 'editMessageText' && !this.live.has(params.message_id)) throw new TelegramError(method, 400, 'Bad Request: message to edit not found');
     if (method === 'sendWidget' || method === 'sendMessage') {
       const id = ++this.nextId;
       this.live.add(id);
@@ -39,15 +47,16 @@ export class FakeApi implements BotApi {
 
 export const USER = 4242;
 
-export function harness(start = Date.UTC(2026, 10, 16, 9, 0), tz = 'Europe/Berlin') {
+export function harness(start = Date.UTC(2026, 10, 16, 9, 0), tz = 'Europe/Berlin', widgets: WidgetSetting = 'auto') {
   const clock = { t: start };
   const api = new FakeApi();
   const db = openDb(':memory:');
   const ctx: Ctx = { cfg: { defaultTz: tz, pinPreview: false, publicUrl: 'https://x.test' }, db, tg: new Tg(api), now: () => clock.t, botUsername: 'todo_bot' };
   const tasks = new TaskService(ctx);
-  const reminders = new ReminderService(ctx, tasks);
-  const preview = new PreviewService(ctx, tasks);
-  const flows = new FlowService(ctx, tasks);
+  const ui = new UiMode(ctx, widgets);
+  const reminders = new ReminderService(ctx, tasks, ui);
+  const preview = new PreviewService(ctx, tasks, ui);
+  const flows = new FlowService(ctx, tasks, ui);
   const router = new Router(ctx, { tasks, reminders, preview, flows }, new Set([USER]));
   let uid = 1, mid = 1;
   const send = async (text: string | undefined, from = USER) => {
@@ -64,8 +73,17 @@ export function harness(start = Date.UTC(2026, 10, 16, 9, 0), tz = 'Europe/Berli
     const a = api.last('answerWidgetQuery');
     return a ? JSON.parse(a.params.data) : null;
   };
+  // Inline-keyboard button tap (fallback UI). Returns the toast text ('' = success).
+  const tap = async (messageId: number, data: string, from = USER) => {
+    const before = api.of('answerCallbackQuery').length;
+    await router.handle({ update_id: uid++, callback_query: { id: `c${uid}`, from: { id: from, is_bot: false, first_name: 'U' }, message: { message_id: messageId, chat: { id: from, type: 'private' }, date: 0 }, data } } as Update);
+    await preview.flush();
+    const a = api.of('answerCallbackQuery');
+    assert(a.length === before + 1, 'every callback query is answered exactly once');
+    return (a[a.length - 1].params.text as string) ?? '';
+  };
   const advance = async (ms: number) => { clock.t += ms; await reminders.tick(); await preview.tick(); await preview.flush(); };
-  return { clock, api, db, ctx, tasks, reminders, preview, flows, router, send, query, advance };
+  return { clock, api, db, ctx, ui, tasks, reminders, preview, flows, router, send, query, tap, advance };
 }
 
 export const state = (call: Call | undefined) => (call ? JSON.parse(call.params.chat_data) : null);

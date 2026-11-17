@@ -1,7 +1,7 @@
 // Routes Telegram updates: whitelisting, commands, chat text, widget queries.
 import { log } from '../log.ts';
 import { isValidTimeZone, localNow } from '../time.ts';
-import type { Message, Update, WidgetQuery } from '../telegram/api.ts';
+import type { CallbackQuery, Message, Update, WidgetQuery } from '../telegram/api.ts';
 import { type Ctx, notice, safeDelete } from '../services/context.ts';
 import type { FlowService } from '../services/flows.ts';
 import type { PreviewService } from '../services/preview.ts';
@@ -23,6 +23,7 @@ export class Router {
 
   async handle(u: Update) {
     if (u.widget_query) return this.onWidgetQuery(u.widget_query);
+    if (u.callback_query) return this.onCallbackQuery(u.callback_query);
     if (u.shared_widget_query) return; // we never send shared widgets
     if (u.message) return this.onMessage(u.message);
   }
@@ -84,12 +85,31 @@ export class Router {
   }
 
   private async onWidgetQuery(q: WidgetQuery) {
-    const answer = (data: unknown) => this.ctx.tg.answerWidgetQuery(q.id, JSON.stringify(data)).catch((e) => log.warn('answerWidgetQuery failed', e instanceof Error ? e.message : e));
-    if (!this.allowed.has(q.from.id) || !q.chat || q.chat.id !== q.from.id) { await answer({ e: 'Not allowed' }); return; }
-    const userId = q.from.id;
+    const answer = async (data: Answer) => {
+      await this.ctx.tg.answerWidgetQuery(q.id, JSON.stringify(data)).catch((e) => log.warn('answerWidgetQuery failed', e instanceof Error ? e.message : e));
+    };
+    await this.onAction(q.from.id, q.chat?.id, q.message_id, q.data, answer);
+  }
+
+  /** Inline-keyboard fallback: button taps carry the same action strings as widget requests. */
+  private async onCallbackQuery(q: CallbackQuery) {
+    let answered = false;
+    const answer = async (data: Answer) => {
+      if (answered) return;
+      answered = true;
+      await this.ctx.tg.answerCallbackQuery(q.id, 'e' in data ? data.e : undefined)
+        .catch((e) => log.warn('answerCallbackQuery failed', e instanceof Error ? e.message : e));
+    };
+    await this.onAction(q.from.id, q.message?.chat.id, q.message?.message_id, q.data ?? '', answer);
+  }
+
+  private async onAction(fromId: number, chatId: number | undefined, messageId: number | undefined, data: string, answer: (a: Answer) => Promise<void>) {
+    if (!this.allowed.has(fromId) || chatId !== fromId) { await answer({ e: 'Not allowed' }); return; }
+    const userId = fromId;
     this.s.tasks.ensureUser(userId);
+    const q = { message_id: messageId };
     // `from` and message_id are trusted (set by Telegram); `data` is not: validate everything.
-    const parts = q.data.split('.');
+    const parts = data.split('.');
     const op = parts[0];
     const id = Number(parts[1]);
     if (!/^[a-z]{2}$/.test(op) || !Number.isSafeInteger(id) || id <= 0) { await answer({ e: 'Bad request' }); return; }
@@ -108,8 +128,11 @@ export class Router {
           await answer({ ok: 1 });
           return;
         }
-        // Creation widget
-        case 'fd': case 'ft': case 'fb': case 'fx': {
+        case 'nn': // inert fallback buttons (calendar headers, blanks)
+          await answer({ ok: 1 });
+          return;
+        // Creation flow (fc/fh/fm/fv: fallback keyboard navigation)
+        case 'fd': case 'ft': case 'fb': case 'fx': case 'fc': case 'fh': case 'fm': case 'fv': {
           const rev = Number(parts[2]);
           const res = await this.s.flows.onWidgetQuery(userId, q.message_id, op, id, rev, parts[3] ?? '');
           await answer(res);
@@ -132,11 +155,13 @@ export class Router {
         this.s.preview.schedule(userId);
         return;
       }
-      log.error('widget query failed', e);
+      log.error('action failed', e);
       await answer({ e: 'Something went wrong' });
     }
   }
 }
+
+type Answer = { ok: 1 } | { e: string };
 
 /** Accepts IANA names case-insensitively ("europe/berlin") and UTC / UTC±H[:MM]. */
 export function normalizeTz(input: string): string | null {

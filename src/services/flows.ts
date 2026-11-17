@@ -10,6 +10,7 @@ import { TelegramError } from '../telegram/api.ts';
 import { widget } from '../widgets/index.ts';
 import { type Ctx, HOUR, safeDelete } from './context.ts';
 import type { TaskService } from './tasks.ts';
+import { type FlowView, renderFlowText, type UiKind, type UiMode } from './ui.ts';
 
 export const FLOW_TTL = 6 * HOUR;
 
@@ -18,6 +19,7 @@ export type Flow = {
   title: string; date: string | null; revision: number;
   source_message_id: number | null; widget_message_id: number | null; prompt_message_id: number | null; hint_message_id: number | null;
   calendar_hint: number; created_at: number; updated_at: number;
+  ui: UiKind;   // 'widget' or 'text' (inline-keyboard fallback)
 };
 
 // Reply-keyboard shortcut labels (spec §6.4).
@@ -42,10 +44,12 @@ export type FlowAnswer = { ok: 1 } | { e: string };
 export class FlowService {
   private ctx: Ctx;
   private tasks: TaskService;
+  private ui: UiMode;
 
-  constructor(ctx: Ctx, tasks: TaskService) {
+  constructor(ctx: Ctx, tasks: TaskService, ui: UiMode) {
     this.ctx = ctx;
     this.tasks = tasks;
+    this.ui = ui;
   }
 
   get(id: number): Flow | null {
@@ -73,10 +77,21 @@ export class FlowService {
     });
   }
 
-  private async pushState(f: Flow) {
+  private textView(f: Flow, view?: FlowView) {
+    const today = this.today(f.user_id);
+    const v: FlowView = view ?? (f.calendar_hint && f.step === 'date' ? { kind: 'cal', month: today.slice(0, 7).replace('-', '') } : { kind: 'main' });
+    return renderFlowText(f, v, today, f.date ? shortDateLabel(f.date, today) : '');
+  }
+
+  private async pushState(f: Flow, view?: FlowView) {
     if (!f.widget_message_id) return;
     try {
-      await this.ctx.tg.editWidgetData(f.user_id, f.widget_message_id, this.widgetState(f));
+      if (f.ui === 'text') {
+        const { text, markup } = this.textView(f, view);
+        await this.ctx.tg.editText(f.user_id, f.widget_message_id, text, markup);
+      } else {
+        await this.ctx.tg.editWidgetData(f.user_id, f.widget_message_id, this.widgetState(f));
+      }
     } catch (e) {
       if (!(e instanceof TelegramError && e.notModified)) log.warn(`flow ${f.id} widget update failed`, e instanceof Error ? e.message : e);
     }
@@ -104,15 +119,31 @@ export class FlowService {
     const title = normalizeTitle(msg.text ?? '');
     if (!title) { await safeDelete(this.ctx, userId, msg.message_id); return; }
     const now = this.ctx.now();
-    const r = this.ctx.db.prepare(`INSERT INTO flows (user_id, status, step, title, revision, source_message_id, created_at, updated_at)
-      VALUES (?, 'open', 'date', ?, 1, ?, ?, ?)`).run(userId, title, msg.message_id, now, now);
+    const ui = this.ui.forNewMessage();
+    const r = this.ctx.db.prepare(`INSERT INTO flows (user_id, status, step, title, revision, source_message_id, created_at, updated_at, ui)
+      VALUES (?, 'open', 'date', ?, 1, ?, ?, ?, ?)`).run(userId, title, msg.message_id, now, now, ui);
     const f = this.get(Number(r.lastInsertRowid))!;
     try {
-      const sent = await this.ctx.tg.sendWidget({
-        chat_id: userId, html: widget('creation').html, chat_data: this.widgetState(f), allow_queries: true,
-        caption: `New task: ${title}`.slice(0, 1024), reply_markup: DATE_KB,
-      });
-      f.widget_message_id = sent.message_id;
+      if (f.ui === 'widget') {
+        try {
+          const sent = await this.ctx.tg.sendWidget({
+            chat_id: userId, html: widget('creation').html, chat_data: this.widgetState(f), allow_queries: true,
+            caption: `New task: ${title}`.slice(0, 1024), reply_markup: DATE_KB,
+          });
+          f.widget_message_id = sent.message_id;
+          this.ui.succeeded();
+        } catch (e) {
+          if (!this.ui.blocked(e)) throw e;
+          f.ui = 'text';
+          this.ctx.db.prepare(`UPDATE flows SET ui = 'text' WHERE id = ?`).run(f.id);
+        }
+      }
+      if (f.ui === 'text') {
+        // Fallback: one message with an inline keyboard; no reply keyboard (it would only duplicate the buttons).
+        const { text, markup } = this.textView(f);
+        const sent = await this.ctx.tg.sendText(userId, text, markup);
+        f.widget_message_id = sent.message_id;
+      }
       this.save(f);
     } catch (e) {
       log.error('could not start creation flow', e);
@@ -184,6 +215,28 @@ export class FlowService {
       case 'fx':
         await this.cancel(f);
         return { ok: 1 };
+      // View-only navigation of the fallback keyboard (calendar, hour/minute grids): no state change.
+      case 'fc': {
+        if (f.step !== 'date' || !/^\d{6}$/.test(arg)) return { e: 'Wrong step' };
+        const mo = Number(arg.slice(4));
+        if (mo < 1 || mo > 12) return { e: 'Invalid month' };
+        await this.pushState(f, { kind: 'cal', month: arg });
+        return { ok: 1 };
+      }
+      case 'fh':
+        if (f.step !== 'time') return { e: 'Wrong step' };
+        await this.pushState(f, { kind: 'hours' });
+        return { ok: 1 };
+      case 'fm': {
+        const h = Number(arg);
+        if (f.step !== 'time' || !/^\d{2}$/.test(arg) || h > 23) return { e: 'Wrong step' };
+        await this.pushState(f, { kind: 'minutes', hour: h });
+        return { ok: 1 };
+      }
+      case 'fv':
+        if (f.calendar_hint) { f.calendar_hint = 0; this.save(f); }
+        await this.pushState(f, { kind: 'main' });
+        return { ok: 1 };
     }
     return { e: 'Unknown action' };
   }
@@ -231,10 +284,11 @@ export class FlowService {
       }
     }
     if (!allGone) await this.pushState(f); // the widget shows "Saved" / "Cancelled" if it survived
-    await this.removeKeyboard(userId);
+    if (f.ui === 'widget') await this.removeKeyboard(userId);
   }
 
   private async prompt(f: Flow, text: string, kb: ReplyMarkup) {
+    if (f.ui === 'text') return; // the fallback message itself carries the buttons and the hint
     const old = f.prompt_message_id;
     try {
       const m = await this.ctx.tg.sendMessage(f.user_id, text, { reply_markup: kb, disable_notification: true });

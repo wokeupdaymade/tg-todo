@@ -1,6 +1,8 @@
 # Telegram To-Do
 
-A private, single-user to-do manager living in Telegram: a **Mini App** (full manager), a persistent **preview widget** in the chat, **creation widgets** spawned by typing a task, and **reminders** for timed tasks. Implements `docs/spec-v2.md`; decisions taken during implementation are in `docs/decisions.md`.
+A private, single-user to-do manager living in Telegram: a **Mini App** (full manager), a persistent **preview widget** in the chat, **creation widgets** spawned by typing a task, and **reminders** for timed tasks.
+
+> **Widgets are currently blocked by Telegram** for ordinary bots (`INPUT_MEDIA_WIDGET_NOT_ALLOWED`, since 13 Nov 2026). The bot detects this and uses regular messages with buttons instead. It re-checks every 12 h and switches back by itself. See `WIDGETS` in `.env.example`. Implements `docs/spec-v2.md`; decisions taken during implementation are in `docs/decisions.md`.
 
 ## Stack
 

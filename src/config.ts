@@ -10,6 +10,7 @@ export type Config = {
   defaultTz: string;
   pinPreview: boolean;
   apiBase: string;            // Bot API base, overridable for tests / local Bot API server
+  widgets: 'auto' | 'on' | 'off'; // auto: use widgets, fall back to inline keyboards if Telegram refuses them
 };
 
 function req(name: string): string {
@@ -33,6 +34,7 @@ export function loadConfig(): Config {
     dbPath: process.env.DB_PATH || './data/todo.sqlite',
     defaultTz,
     pinPreview: /^(1|true|yes)$/i.test(process.env.PIN_PREVIEW || ''),
+    widgets: (['on', 'off'].includes((process.env.WIDGETS || '').toLowerCase()) ? process.env.WIDGETS!.toLowerCase() : 'auto') as Config['widgets'],
     apiBase: (process.env.TELEGRAM_API_BASE || 'https://api.telegram.org').replace(/\/+$/, ''),
   };
 }

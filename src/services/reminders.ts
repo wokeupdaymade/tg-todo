@@ -7,6 +7,7 @@ import { localNow, relativeDateLabel, zonedToEpoch } from '../time.ts';
 import { widget } from '../widgets/index.ts';
 import { type Ctx, DELETE_WINDOW, HOUR, MIN, safeDelete, scheduleDeletion } from './context.ts';
 import type { ReminderSync, TaskService } from './tasks.ts';
+import { renderReminderText, type UiMode } from './ui.ts';
 
 export const REPEAT_EVERY = 5 * MIN;
 export const MAX_REPEATS = 12;          // 12 repeats × 5 min = 1 h, then stop
@@ -22,10 +23,12 @@ export class ReminderService implements ReminderSync {
   private ctx: Ctx;
   private tasks: TaskService;
   private firing = false;
+  private ui: UiMode;
 
-  constructor(ctx: Ctx, tasks: TaskService) {
+  constructor(ctx: Ctx, tasks: TaskService, ui: UiMode) {
     this.ctx = ctx;
     this.tasks = tasks;
+    this.ui = ui;
     tasks.reminders = this;
   }
 
@@ -97,17 +100,26 @@ export class ReminderService implements ReminderSync {
     const tz = this.tasks.tz(r.user_id);
     const today = localNow(now, tz).date;
     const revision = r.revision + 1;
-    const data = JSON.stringify({
-      v: 1, r: revision, i: task.id, t: task.title.slice(0, 200), h: task.time,
-      l: task.date === today ? '' : relativeDateLabel(task.date, today), s: 'a',
-    });
-    const msg = await this.ctx.tg.sendWidget({
-      chat_id: r.user_id,
-      html: widget('reminder').html,
-      chat_data: data,
-      caption: `⏰ ${task.time} — ${task.title}`.slice(0, 1024),
-      allow_queries: true,
-    });
+    const label = task.date === today ? '' : relativeDateLabel(task.date, today);
+    let msg: { message_id: number } | null = null;
+    if (this.ui.forNewMessage() === 'widget') {
+      try {
+        msg = await this.ctx.tg.sendWidget({
+          chat_id: r.user_id,
+          html: widget('reminder').html,
+          chat_data: JSON.stringify({ v: 1, r: revision, i: task.id, t: task.title.slice(0, 200), h: task.time, l: label, s: 'a' }),
+          caption: `⏰ ${task.time} — ${task.title}`.slice(0, 1024),
+          allow_queries: true,
+        });
+        this.ui.succeeded();
+      } catch (e) {
+        if (!this.ui.blocked(e)) throw e;
+      }
+    }
+    if (!msg) {
+      const { text, markup } = renderReminderText(task.id, revision, task.title, task.time, label);
+      msg = await this.ctx.tg.sendText(r.user_id, text, markup); // with sound: it's a reminder
+    }
     const repeat = r.status === 'active' ? r.repeat_count + 1 : 0;
     const done = repeat >= MAX_REPEATS;
     // Commit only if the task's reminder wasn't changed while we were sending.

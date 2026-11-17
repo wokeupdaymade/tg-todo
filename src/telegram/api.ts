@@ -14,6 +14,8 @@ export class TelegramError extends Error {
   }
   get notModified() { return /message is not modified/i.test(this.description); }
   get messageGone() { return /message to (edit|delete) not found|message can't be (deleted|edited)|MESSAGE_ID_INVALID|message not found/i.test(this.description); }
+  /** Telegram refuses widgets from this bot / in this chat (seen since Nov 2026 for ordinary bots). */
+  get widgetsBlocked() { return /INPUT_MEDIA_WIDGET_NOT_ALLOWED/i.test(this.description); }
   get queryTooOld() { return /query is too old|QUERY_ID_INVALID/i.test(this.description); }
 }
 
@@ -40,17 +42,25 @@ export type WidgetQuery = {
   data: string;
   widget_id?: string;
 };
+export type CallbackQuery = { id: string; from: User; message?: Message; data?: string };
+export type InlineButton =
+  | { text: string; callback_data: string }
+  | { text: string; web_app: { url: string } };
+export type InlineKeyboard = { inline_keyboard: InlineButton[][] };
+
 export type Update = {
   update_id: number;
   message?: Message;
   edited_message?: Message;
   widget_query?: WidgetQuery;
+  callback_query?: CallbackQuery;
   shared_widget_query?: { id: string; from: User; data: string; widget_id: string };
 };
 
 export type ReplyMarkup =
   | { keyboard: { text: string }[][]; resize_keyboard?: boolean; is_persistent?: boolean; one_time_keyboard?: boolean; input_field_placeholder?: string }
-  | { remove_keyboard: true };
+  | { remove_keyboard: true }
+  | InlineKeyboard;
 
 export type SendWidgetParams = {
   chat_id: number;
@@ -128,6 +138,20 @@ export class Tg {
   deleteMessages(chat_id: number, message_ids: number[]) { return this.api.call<true>('deleteMessages', { chat_id, message_ids }); }
   pinChatMessage(chat_id: number, message_id: number) {
     return this.api.call<true>('pinChatMessage', { chat_id, message_id, disable_notification: true });
+  }
+  /** HTML-formatted text message (used by the inline-keyboard fallback UI). */
+  sendText(chat_id: number, text: string, reply_markup?: InlineKeyboard, extra: Record<string, unknown> = {}) {
+    return this.api.call<Message>('sendMessage', {
+      chat_id, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...(reply_markup ? { reply_markup } : {}), ...extra,
+    });
+  }
+  editText(chat_id: number, message_id: number, text: string, reply_markup?: InlineKeyboard) {
+    return this.api.call('editMessageText', {
+      chat_id, message_id, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: reply_markup ?? { inline_keyboard: [] },
+    });
+  }
+  answerCallbackQuery(callback_query_id: string, text?: string) {
+    return this.api.call<true>('answerCallbackQuery', text ? { callback_query_id, text } : { callback_query_id }, { timeoutMs: 10000 });
   }
   editMessageCaption(chat_id: number, message_id: number, caption: string) {
     return this.api.call('editMessageCaption', { chat_id, message_id, caption });

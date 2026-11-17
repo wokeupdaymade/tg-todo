@@ -78,6 +78,8 @@ const MIGRATIONS: string[] = [
 
   CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
+  // 2: inline-keyboard fallback UI — remember which UI a creation flow was started with
+  `ALTER TABLE flows ADD COLUMN ui TEXT NOT NULL DEFAULT 'widget';`,
 ];
 
 export type DB = DatabaseSync;
